@@ -170,7 +170,7 @@ class CopyOut(BaseModel):
 
 
 class CopyWithCard(CopyOut):
-    card: CardOut
+    card: CardWithPrice
 
 
 class AssignSlotRequest(BaseModel):
