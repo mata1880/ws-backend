@@ -49,11 +49,15 @@ def delete_collection(collection_id: int, db: Session = Depends(get_db)):
     db.commit()
 
 
-@router.get("/{collection_id}/copies", response_model=List[schemas.CopyOut])
+@router.get("/{collection_id}/copies", response_model=List[schemas.CopyWithCard])
 def list_collection_copies(collection_id: int, db: Session = Depends(get_db)):
     if not db.query(models.Collection).get(collection_id):
         raise HTTPException(404, "Collection not found")
-    return db.query(models.Copy).filter(models.Copy.collection_id == collection_id).all()
+    copies = db.query(models.Copy).filter(models.Copy.collection_id == collection_id).all()
+    return [
+        schemas.CopyWithCard(**schemas.CopyOut.model_validate(c).model_dump(), card=schemas.CardOut.model_validate(c.card))
+        for c in copies
+    ]
 
 
 @router.get("/{collection_id}/value", response_model=schemas.CollectionValueOut)

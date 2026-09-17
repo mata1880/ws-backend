@@ -169,5 +169,9 @@ class CopyOut(BaseModel):
     date_acquired: Optional[date] = None
 
 
+class CopyWithCard(CopyOut):
+    card: CardOut
+
+
 class AssignSlotRequest(BaseModel):
     copy_id: int
