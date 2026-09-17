@@ -3,7 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import models, schemas
+from .. import models, schemas, utils
 from ..database import get_db
 
 router = APIRouter(prefix="/wishlists", tags=["wishlists"])
@@ -45,12 +45,12 @@ def delete_wishlist(wishlist_id: int, db: Session = Depends(get_db)):
     db.commit()
 
 
-@router.get("/{wishlist_id}/items", response_model=List[schemas.CardOut])
+@router.get("/{wishlist_id}/items", response_model=List[schemas.CardWithPrice])
 def list_wishlist_items(wishlist_id: int, db: Session = Depends(get_db)):
     if not db.query(models.Wishlist).get(wishlist_id):
         raise HTTPException(404, "Wishlist not found")
     items = db.query(models.WishlistItem).filter(models.WishlistItem.wishlist_id == wishlist_id).all()
-    return [i.card for i in items]
+    return [utils.card_with_price(db, i.card) for i in items]
 
 
 @router.post("/{wishlist_id}/items", status_code=201)

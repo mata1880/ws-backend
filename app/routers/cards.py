@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from .. import models, schemas
+from .. import models, schemas, utils
 from ..database import get_db
 
 router = APIRouter(prefix="/cards", tags=["cards"])
@@ -60,22 +60,7 @@ def get_card(card_id: int, db: Session = Depends(get_db)):
     c = db.query(models.Card).get(card_id)
     if not c:
         raise HTTPException(404, "Card not found")
-    latest = (
-        db.query(models.PriceSnapshot)
-        .filter(models.PriceSnapshot.card_id == c.id)
-        .order_by(models.PriceSnapshot.scraped_at.desc())
-        .first()
-    )
-    owned = db.query(func.count(models.Copy.id)).filter(models.Copy.card_id == c.id).scalar()
-    wi = db.query(models.WishlistItem).filter(models.WishlistItem.card_id == c.id).first()
-    return schemas.CardWithPrice(
-        **schemas.CardOut.model_validate(c).model_dump(),
-        sell_price_jpy=latest.sell_price_jpy if latest else None,
-        buy_price_jpy=latest.buy_price_jpy if latest else None,
-        price_scraped_at=latest.scraped_at if latest else None,
-        owned_copies=owned or 0,
-        wishlist_id=wi.wishlist_id if wi else None,
-    )
+    return utils.card_with_price(db, c)
 
 
 @router.get("/{card_id}/price-history", response_model=List[schemas.PriceSnapshotOut])

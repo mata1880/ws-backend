@@ -3,7 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import models, schemas
+from .. import models, schemas, utils
 from ..database import get_db
 
 router = APIRouter(prefix="/collections", tags=["collections"])
@@ -55,7 +55,7 @@ def list_collection_copies(collection_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Collection not found")
     copies = db.query(models.Copy).filter(models.Copy.collection_id == collection_id).all()
     return [
-        schemas.CopyWithCard(**schemas.CopyOut.model_validate(c).model_dump(), card=schemas.CardOut.model_validate(c.card))
+        schemas.CopyWithCard(**schemas.CopyOut.model_validate(c).model_dump(), card=utils.card_with_price(db, c.card))
         for c in copies
     ]
 
