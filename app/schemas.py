@@ -31,6 +31,7 @@ class CardWithPrice(CardOut):
     buy_price_jpy: Optional[int] = None
     price_scraped_at: Optional[datetime] = None
     owned_copies: int = 0
+    wishlist_id: Optional[int] = None  # which wishlist this card is currently on, if any
 
 
 class PriceSnapshotOut(BaseModel):

@@ -27,6 +27,14 @@ def list_cards(
         q = q.filter(models.Card.rarity == rarity)
     cards = q.all()
 
+    # One query for wishlist membership across all cards, instead of one
+    # query per card — a card can only be on one wishlist at a time, so
+    # this is a simple id -> wishlist_id map.
+    wishlist_by_card = {
+        wi.card_id: wi.wishlist_id
+        for wi in db.query(models.WishlistItem).all()
+    }
+
     out = []
     for c in cards:
         latest = (
@@ -42,6 +50,7 @@ def list_cards(
             buy_price_jpy=latest.buy_price_jpy if latest else None,
             price_scraped_at=latest.scraped_at if latest else None,
             owned_copies=owned or 0,
+            wishlist_id=wishlist_by_card.get(c.id),
         ))
     return out
 
@@ -58,12 +67,14 @@ def get_card(card_id: int, db: Session = Depends(get_db)):
         .first()
     )
     owned = db.query(func.count(models.Copy.id)).filter(models.Copy.card_id == c.id).scalar()
+    wi = db.query(models.WishlistItem).filter(models.WishlistItem.card_id == c.id).first()
     return schemas.CardWithPrice(
         **schemas.CardOut.model_validate(c).model_dump(),
         sell_price_jpy=latest.sell_price_jpy if latest else None,
         buy_price_jpy=latest.buy_price_jpy if latest else None,
         price_scraped_at=latest.scraped_at if latest else None,
         owned_copies=owned or 0,
+        wishlist_id=wi.wishlist_id if wi else None,
     )
 
 
