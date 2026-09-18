@@ -28,4 +28,5 @@ def card_with_price(db: Session, card: models.Card) -> schemas.CardWithPrice:
         price_scraped_at=latest.scraped_at if latest else None,
         owned_copies=owned or 0,
         wishlist_id=wi.wishlist_id if wi else None,
+        availability=latest.availability if latest else None,
     )

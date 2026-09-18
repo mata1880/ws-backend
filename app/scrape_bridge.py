@@ -23,12 +23,22 @@ def _get_or_create_card(db: Session, card_number: str, game: str, set_code: str)
     return card
 
 
-def run_price_scrape(db: Session, game: str, card_code: str, mode: str, delay: float = 1.5):
+BULK_RARITIES_SKIP_PRICE = {"C", "U", "R", "CR", "CX"}
+
+
+def run_price_scrape(db: Session, game: str, card_code: str, mode: str, delay: float = 1.5, skip_bulk_rarities: bool = False):
     """
     Runs the exact same logic as `yuyutei_scraper.py --card-code`, but
     writes results into cards + price_snapshots instead of docs/data/.
     Every call adds NEW price_snapshot rows — nothing is overwritten, so
     price history and collection-value-over-time just fall out of the data.
+
+    skip_bulk_rarities: when scraping a whole title from the Prices page,
+    C/U/R/CR/CX cards still get added/updated as Card rows (so they show
+    up in Browse) but don't get a price fetched — those are cheap bulk
+    rarities not worth the scrape time across a whole title. A targeted
+    price check on a specific wishlist/collection/binder never sets this,
+    so those rarities still get real prices when you actually own one.
     """
     session = requests.Session()
     records, groups = yuyutei.scrape_by_card_code(session, game, card_code, mode, delay)
@@ -51,6 +61,9 @@ def run_price_scrape(db: Session, game: str, card_code: str, mode: str, delay: f
         if rec.imageUrl and not card.image_url:
             card.image_url = rec.imageUrl
         cards_seen += 1
+
+        if skip_bulk_rarities and (rec.rarity or "").strip().upper() in BULK_RARITIES_SKIP_PRICE:
+            continue
 
         snap = models.PriceSnapshot(
             card_id=card.id,
@@ -83,12 +96,37 @@ def run_price_check(db: Session, cards, delay: float = 1.2):
     in one collection/wishlist/binder) — one exact-card-number search per
     card, not a broad set-wide scrape. More requests than a set-level
     scrape, but only touches the cards you actually asked about.
-    """
-    codes = []
-    for c in cards:
-        if c.card_number and c.card_number not in codes:
-            codes.append(c.card_number)
 
+    If there are more than MAX_PRICE_CHECK_CARDS, cards that have never
+    been price-checked (or were checked longest ago) go first — so
+    clicking the button again on a big list naturally works through the
+    rest over a few clicks, rather than re-checking the same first 50
+    every time and never reaching the tail end.
+    """
+    unique = []
+    seen = set()
+    for c in cards:
+        if c.card_number and c.card_number not in seen:
+            seen.add(c.card_number)
+            unique.append(c)
+
+    latest_by_card_id = {}
+    if unique:
+        card_ids = [c.id for c in unique]
+        for snap in (
+            db.query(models.PriceSnapshot)
+            .filter(models.PriceSnapshot.card_id.in_(card_ids))
+            .order_by(models.PriceSnapshot.scraped_at.desc())
+            .all()
+        ):
+            latest_by_card_id.setdefault(snap.card_id, snap.scraped_at)
+
+    # never-checked cards (no entry at all) sort first, via datetime.min;
+    # otherwise oldest-checked first.
+    from datetime import datetime as _dt
+    unique.sort(key=lambda c: latest_by_card_id.get(c.id, _dt.min))
+
+    codes = [c.card_number for c in unique]
     truncated = len(codes) > MAX_PRICE_CHECK_CARDS
     codes = codes[:MAX_PRICE_CHECK_CARDS]
 

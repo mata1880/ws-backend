@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_db
-from .binders import FRAME_COMPATIBILITY, PAGE_SIZE, _resolved_layout
+from .binders import FRAME_COMPATIBILITY, _resolved_layout
 
 router = APIRouter(prefix="/copies", tags=["copies"])
 
@@ -123,59 +123,3 @@ def delete_copy(copy_id: int, db: Session = Depends(get_db)):
     db.commit()
 
 
-@router.post("/{copy_id}/auto-place", response_model=schemas.BinderSlotOut)
-def auto_place(copy_id: int, db: Session = Depends(get_db)):
-    """
-    Priority-based binder auto-placement: finds the highest-priority binder
-    (lowest `priority` number) whose layout allows this copy's frame type,
-    preferring an existing planned slot for this exact card (placed from
-    Browse/Wishlist before you owned it) over any other open slot.
-    """
-    copy = db.query(models.Copy).get(copy_id)
-    if not copy:
-        raise HTTPException(404, "Copy not found")
-    if db.query(models.BinderSlot).filter(models.BinderSlot.copy_id == copy.id).first():
-        raise HTTPException(409, "This copy is already placed in a binder — remove it first")
-
-    binders = db.query(models.Binder).order_by(models.Binder.priority).all()
-
-    for binder in binders:
-        if copy.frame_type not in FRAME_COMPATIBILITY[_resolved_layout(binder.layout)]:
-            continue
-
-        binder_slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder.id).all()
-        occupied = {s.slot_index for s in binder_slots}
-
-        planned_match = next((s for s in binder_slots if s.card_id == copy.card_id and s.copy_id is None), None)
-        if planned_match:
-            planned_match.copy_id = copy.id
-            db.commit()
-            db.refresh(planned_match)
-            return _slot_out_for(planned_match, db)
-
-        slot_index = 0
-        while slot_index in occupied:
-            slot_index += 1
-        if slot_index < PAGE_SIZE[_resolved_layout(binder.layout)] * 50:
-            new_slot = models.BinderSlot(binder_id=binder.id, slot_index=slot_index, card_id=copy.card_id, copy_id=copy.id)
-            db.add(new_slot)
-            db.commit()
-            db.refresh(new_slot)
-            return _slot_out_for(new_slot, db)
-
-    raise HTTPException(409, f"No binder can currently fit a '{copy.frame_type}' copy — create one or free up a slot")
-
-
-def _slot_out_for(slot: models.BinderSlot, db: Session) -> schemas.BinderSlotOut:
-    copy = db.query(models.Copy).get(slot.copy_id) if slot.copy_id else None
-    card = db.query(models.Card).get(slot.card_id)
-    return schemas.BinderSlotOut(
-        slot_index=slot.slot_index,
-        copy_id=copy.id if copy else None,
-        card=schemas.CardOut.model_validate(card),
-        grade=copy.grade if copy else None,
-        frame_type=copy.frame_type if copy else None,
-        copy_number=copy.copy_number if copy else None,
-        planned=copy is None,
-        greyed_out=(copy is None) or (copy.collection_id is None),
-    )

@@ -15,7 +15,7 @@ def scrape_prices(req: schemas.ScrapePricesRequest, db: Session = Depends(get_db
     into price history instead of a JSON file.
     """
     try:
-        result = scrape_bridge.run_price_scrape(db, req.game, req.card_code, req.mode)
+        result = scrape_bridge.run_price_scrape(db, req.game, req.card_code, req.mode, skip_bulk_rarities=req.skip_bulk_rarities)
     except Exception as e:
         raise HTTPException(502, f"Scrape failed: {e}")
     return schemas.ScrapeResult(**result)

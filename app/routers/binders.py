@@ -49,7 +49,7 @@ def _slot_out(slot: models.BinderSlot) -> schemas.BinderSlotOut:
 
 @router.get("", response_model=List[schemas.BinderOut])
 def list_binders(db: Session = Depends(get_db)):
-    return db.query(models.Binder).order_by(models.Binder.priority).all()
+    return db.query(models.Binder).order_by(models.Binder.name).all()
 
 
 @router.post("", response_model=schemas.BinderOut, status_code=201)
@@ -57,7 +57,7 @@ def create_binder(body: schemas.BinderCreate, db: Session = Depends(get_db)):
     _validate_layout(body.layout)
     if db.query(models.Binder).filter(models.Binder.name == body.name).first():
         raise HTTPException(409, "A binder with that name already exists")
-    b = models.Binder(name=body.name, layout=body.layout, priority=body.priority)
+    b = models.Binder(name=body.name, layout=body.layout)
     db.add(b)
     db.commit()
     db.refresh(b)
@@ -74,8 +74,6 @@ def update_binder(binder_id: int, body: schemas.BinderUpdate, db: Session = Depe
         b.layout = body.layout
     if body.name is not None:
         b.name = body.name
-    if body.priority is not None:
-        b.priority = body.priority
     db.commit()
     db.refresh(b)
     return b
@@ -221,6 +219,84 @@ def find_planned_slot(binder_id: int, card_id: int, db: Session = Depends(get_db
     if not slot:
         raise HTTPException(404, "No planned slot for that card in this binder")
     return _slot_out(slot)
+
+
+@router.get("/{binder_id}/fillable", response_model=List[schemas.FillableSlotOut])
+def fillable_slots(binder_id: int, db: Session = Depends(get_db)):
+    """
+    Which of this binder's planned (greyed, no-copy) slots currently have
+    an owned, collection-filed copy available to fill them? Drives the
+    "you can add X cards to this binder" banner and the Fill-all button —
+    entirely scoped to this one binder, no cross-binder priority involved
+    (that's been removed: you place cards into binders on purpose now,
+    not via automatic priority ordering).
+    """
+    if not db.query(models.Binder).get(binder_id):
+        raise HTTPException(404, "Binder not found")
+
+    placed_copy_ids = {
+        row.copy_id for row in
+        db.query(models.BinderSlot.copy_id).filter(models.BinderSlot.copy_id.isnot(None))
+    }
+    planned = (
+        db.query(models.BinderSlot)
+        .filter(models.BinderSlot.binder_id == binder_id, models.BinderSlot.copy_id.is_(None))
+        .all()
+    )
+
+    out = []
+    for slot in planned:
+        candidate = (
+            db.query(models.Copy)
+            .filter(
+                models.Copy.card_id == slot.card_id,
+                models.Copy.collection_id.isnot(None),  # must actually be filed, not just owned
+            )
+            .all()
+        )
+        available = next((c for c in candidate if c.id not in placed_copy_ids), None)
+        if available:
+            out.append(schemas.FillableSlotOut(slot_index=slot.slot_index, card=schemas.CardOut.model_validate(slot.card), copy_id=available.id))
+    return out
+
+
+@router.post("/{binder_id}/fill-all", response_model=schemas.FillAllResult)
+def fill_all(binder_id: int, db: Session = Depends(get_db)):
+    """Fills every currently-fillable planned slot in this binder in one go."""
+    if not db.query(models.Binder).get(binder_id):
+        raise HTTPException(404, "Binder not found")
+
+    filled_slots = []
+    # Loop rather than reuse fillable_slots()'s single pass, since filling
+    # one slot changes which copies are still available for the next one.
+    while True:
+        placed_copy_ids = {
+            row.copy_id for row in
+            db.query(models.BinderSlot.copy_id).filter(models.BinderSlot.copy_id.isnot(None))
+        }
+        planned = (
+            db.query(models.BinderSlot)
+            .filter(models.BinderSlot.binder_id == binder_id, models.BinderSlot.copy_id.is_(None))
+            .all()
+        )
+        progressed = False
+        for slot in planned:
+            candidate = (
+                db.query(models.Copy)
+                .filter(models.Copy.card_id == slot.card_id, models.Copy.collection_id.isnot(None))
+                .all()
+            )
+            available = next((c for c in candidate if c.id not in placed_copy_ids), None)
+            if available:
+                slot.copy_id = available.id
+                db.commit()
+                filled_slots.append(slot.slot_index)
+                progressed = True
+                break  # placed_copy_ids is now stale, restart the scan
+        if not progressed:
+            break
+
+    return schemas.FillAllResult(filled=len(filled_slots), slots=filled_slots)
 
 
 @router.post("/{binder_id}/price-check", response_model=schemas.PriceCheckResult)

@@ -32,6 +32,7 @@ class CardWithPrice(CardOut):
     price_scraped_at: Optional[datetime] = None
     owned_copies: int = 0
     wishlist_id: Optional[int] = None  # which wishlist this card is currently on, if any
+    availability: Optional[str] = None  # e.g. "In Stock" / "Sold Out", from the latest price snapshot
 
 
 class PriceSnapshotOut(BaseModel):
@@ -48,6 +49,7 @@ class ScrapePricesRequest(BaseModel):
     game: str = "ws"
     card_code: str          # e.g. "OSK/S133" or "OSK" — matches --card-code
     mode: str = "both"      # "sell" | "buy" | "both"
+    skip_bulk_rarities: bool = False  # if true, still adds/updates the cards but doesn't fetch prices for C/U/R/CR/CX
 
 
 class ScrapeCatalogRequest(BaseModel):
@@ -112,13 +114,11 @@ class WishlistItemAdd(BaseModel):
 class BinderCreate(BaseModel):
     name: str
     layout: str = "3x3"
-    priority: int = 0
 
 
 class BinderUpdate(BaseModel):
     name: Optional[str] = None
     layout: Optional[str] = None
-    priority: Optional[int] = None
 
 
 class BinderOut(BaseModel):
@@ -126,7 +126,6 @@ class BinderOut(BaseModel):
     id: int
     name: str
     layout: str
-    priority: int
     created_at: datetime
 
 
@@ -139,6 +138,17 @@ class BinderSlotOut(BaseModel):
     copy_number: Optional[int] = None
     greyed_out: bool = False  # true when there's no linked, collection-filed copy yet
     planned: bool = False     # true when this slot has no copy at all (card you don't own)
+
+
+class FillableSlotOut(BaseModel):
+    slot_index: int
+    card: CardOut
+    copy_id: int  # the specific owned, collection-filed copy that would fill this slot
+
+
+class FillAllResult(BaseModel):
+    filled: int
+    slots: List[int]  # slot_index values that got filled
 
 
 class CopyCreate(BaseModel):

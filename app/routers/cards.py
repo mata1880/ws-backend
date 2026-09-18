@@ -51,6 +51,7 @@ def list_cards(
             price_scraped_at=latest.scraped_at if latest else None,
             owned_copies=owned or 0,
             wishlist_id=wishlist_by_card.get(c.id),
+            availability=latest.availability if latest else None,
         ))
     return out
 
