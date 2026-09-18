@@ -13,7 +13,6 @@ from . import models
 from .scraping import yuyutei_scraper as yuyutei
 from .scraping import wstcg_scraper as wstcg
 
-
 def _get_or_create_card(db: Session, card_number: str, game: str, set_code: str) -> models.Card:
     card = db.query(models.Card).filter(models.Card.card_number == card_number).first()
     if card is None:
@@ -22,9 +21,7 @@ def _get_or_create_card(db: Session, card_number: str, game: str, set_code: str)
         db.flush()  # get card.id without committing yet
     return card
 
-
 BULK_RARITIES_SKIP_PRICE = {"C", "U", "R", "CR", "CX"}
-
 
 def run_price_scrape(db: Session, game: str, card_code: str, mode: str, delay: float = 1.5, skip_bulk_rarities: bool = False):
     """
@@ -79,52 +76,47 @@ def run_price_scrape(db: Session, game: str, card_code: str, mode: str, delay: f
     db.commit()
     return {"cards_seen": cards_seen, "price_snapshots_added": snapshots_added, "sets": sets_touched}
 
-
 def _base_card_number(cn: str) -> str:
     # Mirrors the frontend's baseCardNumber(): strip a trailing rarity
     # suffix like "SSP"/"S"/"+" so a yuyu-tei card_number ("OSK/S121-002SSP")
     # can match the catalog's plain number ("OSK/S121-002").
     return re.sub(r"[A-Z+]+$", "", cn or "")
 
-
 MAX_PRICE_CHECK_CARDS = 50  # a single request with no progress bar and no partial-recovery if interrupted — kept well short of the 100-min platform timeout on purpose
 
-
-def run_price_check(db: Session, cards, delay: float = 1.2):
-    """
-    Re-scrapes current prices for a specific set of cards (e.g. everything
-    in one collection/wishlist/binder) — one exact-card-number search per
-    card, not a broad set-wide scrape. More requests than a set-level
-    scrape, but only touches the cards you actually asked about.
-
-    If there are more than MAX_PRICE_CHECK_CARDS, cards that have never
-    been price-checked (or were checked longest ago) go first — so
-    clicking the button again on a big list naturally works through the
-    rest over a few clicks, rather than re-checking the same first 50
-    every time and never reaching the tail end.
-    """
+def _dedupe_by_card_number(cards):
     unique = []
     seen = set()
     for c in cards:
         if c.card_number and c.card_number not in seen:
             seen.add(c.card_number)
             unique.append(c)
+    return unique
 
-    latest_by_card_id = {}
+def run_price_check(db: Session, cards, delay: float = 1.2):
+    """
+    Fetches a first price for every card in the given list that doesn't
+    have ANY price snapshot yet — one exact-card-number search per card.
+    Cards that already have a price are skipped entirely, so clicking
+    "Price check" after adding one new card to an otherwise fully-priced
+    collection/wishlist/binder only fetches that one new card instead of
+    re-checking everything already known (which is what made this slow
+    before). Use run_price_update() instead when you want to refresh
+    prices that already exist and see what changed.
+    """
+    unique = _dedupe_by_card_number(cards)
+
     if unique:
         card_ids = [c.id for c in unique]
-        for snap in (
-            db.query(models.PriceSnapshot)
+        priced_ids = {
+            row.card_id for row in
+            db.query(models.PriceSnapshot.card_id)
             .filter(models.PriceSnapshot.card_id.in_(card_ids))
-            .order_by(models.PriceSnapshot.scraped_at.desc())
-            .all()
-        ):
-            latest_by_card_id.setdefault(snap.card_id, snap.scraped_at)
+            .distinct()
+        }
+        unique = [c for c in unique if c.id not in priced_ids]
 
-    # never-checked cards (no entry at all) sort first, via datetime.min;
-    # otherwise oldest-checked first.
-    from datetime import datetime as _dt
-    unique.sort(key=lambda c: latest_by_card_id.get(c.id, _dt.min))
+    unique.sort(key=lambda c: c.card_number)
 
     codes = [c.card_number for c in unique]
     truncated = len(codes) > MAX_PRICE_CHECK_CARDS
@@ -143,6 +135,73 @@ def run_price_check(db: Session, cards, delay: float = 1.2):
         "truncated": truncated,
     }
 
+def run_price_update(db: Session, cards, delay: float = 1.2):
+    """
+    Re-scrapes current prices for EVERY given card, regardless of whether
+    it already has one — the counterpart to run_price_check(), which only
+    fills in cards with no price at all. This is the slower, "refresh
+    everything" operation, so it keeps the same never-checked-or-oldest-
+    first ordering (and the same MAX_PRICE_CHECK_CARDS cap) run_price_check
+    used to have, and additionally reports which cards' sell/buy price
+    actually changed so the "Price update" button can show something more
+    useful than a bare count.
+    """
+    unique = _dedupe_by_card_number(cards)
+
+    latest_by_card_id = {}
+    if unique:
+        card_ids = [c.id for c in unique]
+        for snap in (
+            db.query(models.PriceSnapshot)
+            .filter(models.PriceSnapshot.card_id.in_(card_ids))
+            .order_by(models.PriceSnapshot.scraped_at.desc())
+            .all()
+        ):
+            latest_by_card_id.setdefault(snap.card_id, snap)
+
+    from datetime import datetime as _dt
+    unique.sort(key=lambda c: latest_by_card_id[c.id].scraped_at if c.id in latest_by_card_id else _dt.min)
+
+    truncated = len(unique) > MAX_PRICE_CHECK_CARDS
+    unique = unique[:MAX_PRICE_CHECK_CARDS]
+
+    results = []
+    changes = []
+    total_snapshots = 0
+    for card in unique:
+        before = latest_by_card_id.get(card.id)
+        old_sell = before.sell_price_jpy if before else None
+        old_buy = before.buy_price_jpy if before else None
+
+        r = run_price_scrape(db, "ws", card.card_number, "both", delay)
+        results.append({"prefix": card.card_number, **r})
+        total_snapshots += r["price_snapshots_added"]
+
+        after = (
+            db.query(models.PriceSnapshot)
+            .filter(models.PriceSnapshot.card_id == card.id)
+            .order_by(models.PriceSnapshot.scraped_at.desc())
+            .first()
+        )
+        new_sell = after.sell_price_jpy if after else None
+        new_buy = after.buy_price_jpy if after else None
+
+        if new_sell != old_sell or new_buy != old_buy:
+            changes.append({
+                "card_number": card.card_number,
+                "name": card.name,
+                "old_sell_price_jpy": old_sell,
+                "new_sell_price_jpy": new_sell,
+                "old_buy_price_jpy": old_buy,
+                "new_buy_price_jpy": new_buy,
+            })
+
+    return {
+        "prefixes_checked": [c.card_number for c in unique],
+        "total_price_snapshots_added": total_snapshots,
+        "truncated": truncated,
+        "changes": changes,
+    }
 
 def run_catalog_scrape(db: Session, query: str, delay: float = 1.0):
     """
