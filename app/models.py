@@ -130,7 +130,7 @@ class WishlistItem(Base):
     )
 
 
-VALID_LAYOUTS = ("3x3", "4x5", "5x5")
+VALID_LAYOUTS = ("3x3", "4x3")
 
 
 class Binder(Base):

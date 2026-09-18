@@ -455,12 +455,20 @@ def scrape_set(session: requests.Session, game: str, set_code: str, mode: str,
 def merge_rows(sell_rows, buy_rows, mode):
     by_number = {}
 
+    def sell_url(r):
+        # Always construct the SELL-page URL from game/setCode/cardId,
+        # regardless of whether this row came from sell_rows or buy_rows —
+        # a card only found via the buy-side scrape was previously getting
+        # its buy-page URL instead, which also meant it never got a chance
+        # to pick up a real sell price at all.
+        return f"{BASE_URL}/sell/{r['game']}/card/{r['setCode']}/{r['cardId']}"
+
     for r in sell_rows:
         rec = CardRecord(
             game=r["game"], setCode=r["setCode"], cardId=r["cardId"],
             cardNumber=r["cardNumber"], name=r["name"], rarity=r["rarity"],
             stock=r["stock"], availability=r["availability"],
-            imageUrl=r["imageUrl"], url=r["url"],
+            imageUrl=r["imageUrl"], url=sell_url(r),
         )
         # first (non-discount) price is the sell price
         if r["prices"]:
@@ -473,7 +481,7 @@ def merge_rows(sell_rows, buy_rows, mode):
             rec = CardRecord(
                 game=r["game"], setCode=r["setCode"], cardId=r["cardId"],
                 cardNumber=r["cardNumber"], name=r["name"], rarity=r["rarity"],
-                imageUrl=r["imageUrl"], url=r["url"],
+                imageUrl=r["imageUrl"], url=sell_url(r),
             )
             by_number[r["cardNumber"]] = rec
 

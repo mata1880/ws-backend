@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_db
-from .binders import FRAME_COMPATIBILITY, PAGE_SIZE
+from .binders import FRAME_COMPATIBILITY, PAGE_SIZE, _resolved_layout
 
 router = APIRouter(prefix="/copies", tags=["copies"])
 
@@ -79,7 +79,7 @@ def update_copy(copy_id: int, body: schemas.CopyUpdate, db: Session = Depends(ge
             raise HTTPException(422, f"frame_type must be one of {models.VALID_FRAME_TYPES}")
         if copy.binder_id is not None:
             binder = db.query(models.Binder).get(copy.binder_id)
-            if binder and body.frame_type not in FRAME_COMPATIBILITY[binder.layout]:
+            if binder and body.frame_type not in FRAME_COMPATIBILITY[_resolved_layout(binder.layout)]:
                 raise HTTPException(
                     422,
                     f"Can't change to '{body.frame_type}' — it wouldn't fit this copy's "
@@ -128,7 +128,7 @@ def auto_place(copy_id: int, db: Session = Depends(get_db)):
     binders = db.query(models.Binder).order_by(models.Binder.priority).all()
 
     for binder in binders:
-        if copy.frame_type not in FRAME_COMPATIBILITY[binder.layout]:
+        if copy.frame_type not in FRAME_COMPATIBILITY[_resolved_layout(binder.layout)]:
             continue
 
         occupied = {
@@ -164,7 +164,7 @@ def auto_place(copy_id: int, db: Session = Depends(get_db)):
         slot = 0
         while slot in occupied:
             slot += 1
-        if slot < PAGE_SIZE[binder.layout] * 50:
+        if slot < PAGE_SIZE[_resolved_layout(binder.layout)] * 50:
             copy.binder_id = binder.id
             copy.binder_slot = slot
             db.commit()

@@ -11,12 +11,20 @@ router = APIRouter(prefix="/binders", tags=["binders"])
 # Which frame types physically fit in each binder layout — a toploader or
 # slab doesn't fit in a thin sleeve-page pocket, and nothing slabbed fits
 # in a binder at all.
-PAGE_SIZE = {"3x3": 9, "4x5": 20, "5x5": 25}
+PAGE_SIZE = {"3x3": 9, "4x3": 12}
 FRAME_COMPATIBILITY = {
     "3x3": {"raw", "sleeve", "toploader"},
-    "4x5": {"raw", "sleeve"},
-    "5x5": {"raw", "sleeve"},
+    "4x3": {"raw", "sleeve"},
 }
+# Old layout names (removed) fall back to these so a binder created before
+# this change doesn't just start 500-ing — it behaves like the closest
+# still-supported layout instead. Edit the binder to move it onto "3x3" or
+# "4x3" properly when you get a chance.
+_LEGACY_LAYOUT_FALLBACK = {"4x5": "4x3", "5x5": "4x3"}
+
+
+def _resolved_layout(layout: str) -> str:
+    return _LEGACY_LAYOUT_FALLBACK.get(layout, layout)
 
 
 def _validate_layout(layout: str):
@@ -106,7 +114,7 @@ def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest
     if not copy:
         raise HTTPException(404, "Copy not found")
 
-    allowed = FRAME_COMPATIBILITY[b.layout]
+    allowed = FRAME_COMPATIBILITY[_resolved_layout(b.layout)]
     if copy.frame_type not in allowed:
         raise HTTPException(
             422,
@@ -159,7 +167,7 @@ def available_copies(binder_id: int, card_id: int, db: Session = Depends(get_db)
     b = db.query(models.Binder).get(binder_id)
     if not b:
         raise HTTPException(404, "Binder not found")
-    allowed = FRAME_COMPATIBILITY[b.layout]
+    allowed = FRAME_COMPATIBILITY[_resolved_layout(b.layout)]
     return (
         db.query(models.Copy)
         .filter(
