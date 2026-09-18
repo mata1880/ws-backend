@@ -3,7 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import models, schemas, utils
+from .. import models, schemas, utils, scrape_bridge
 from ..database import get_db
 
 router = APIRouter(prefix="/wishlists", tags=["wishlists"])
@@ -86,3 +86,17 @@ def remove_wishlist_item(wishlist_id: int, card_id: int, db: Session = Depends(g
         raise HTTPException(404, "Not on this wishlist")
     db.delete(item)
     db.commit()
+
+
+@router.post("/{wishlist_id}/price-check", response_model=schemas.PriceCheckResult)
+def price_check_wishlist(wishlist_id: int, db: Session = Depends(get_db)):
+    """Re-scrapes current prices for every card on this wishlist."""
+    if not db.query(models.Wishlist).get(wishlist_id):
+        raise HTTPException(404, "Wishlist not found")
+    items = db.query(models.WishlistItem).filter(models.WishlistItem.wishlist_id == wishlist_id).all()
+    cards = [i.card for i in items]
+    try:
+        result = scrape_bridge.run_price_check(db, cards)
+    except Exception as e:
+        raise HTTPException(502, f"Price check failed: {e}")
+    return schemas.PriceCheckResult(**result)

@@ -3,7 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import models, schemas, utils
+from .. import models, schemas, utils, scrape_bridge
 from ..database import get_db
 
 router = APIRouter(prefix="/collections", tags=["collections"])
@@ -90,3 +90,18 @@ def collection_value(collection_id: int, db: Session = Depends(get_db)):
         total_buy_value_jpy=total_buy,
         total_purchase_cost_jpy=total_cost,
     )
+
+
+@router.post("/{collection_id}/price-check", response_model=schemas.PriceCheckResult)
+def price_check_collection(collection_id: int, db: Session = Depends(get_db)):
+    """Re-scrapes current prices for every card in this collection (see
+    scrape_bridge.run_price_check for how it groups cards into requests)."""
+    if not db.query(models.Collection).get(collection_id):
+        raise HTTPException(404, "Collection not found")
+    copies = db.query(models.Copy).filter(models.Copy.collection_id == collection_id).all()
+    cards = [c.card for c in copies]
+    try:
+        result = scrape_bridge.run_price_check(db, cards)
+    except Exception as e:
+        raise HTTPException(502, f"Price check failed: {e}")
+    return schemas.PriceCheckResult(**result)

@@ -60,6 +60,12 @@ class ScrapeResult(BaseModel):
     sets: List[str] = []
 
 
+class PriceCheckResult(BaseModel):
+    prefixes_checked: List[str]
+    total_price_snapshots_added: int
+    truncated: bool
+
+
 class CollectionCreate(BaseModel):
     name: str
 

@@ -3,7 +3,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import models, schemas
+from .. import models, schemas, scrape_bridge
 from ..database import get_db
 
 router = APIRouter(prefix="/binders", tags=["binders"])
@@ -177,3 +177,17 @@ def available_copies(binder_id: int, card_id: int, db: Session = Depends(get_db)
         )
         .all()
     )
+
+
+@router.post("/{binder_id}/price-check", response_model=schemas.PriceCheckResult)
+def price_check_binder(binder_id: int, db: Session = Depends(get_db)):
+    """Re-scrapes current prices for every card currently placed in this binder."""
+    if not db.query(models.Binder).get(binder_id):
+        raise HTTPException(404, "Binder not found")
+    copies = db.query(models.Copy).filter(models.Copy.binder_id == binder_id).all()
+    cards = [c.card for c in copies]
+    try:
+        result = scrape_bridge.run_price_check(db, cards)
+    except Exception as e:
+        raise HTTPException(502, f"Price check failed: {e}")
+    return schemas.PriceCheckResult(**result)
