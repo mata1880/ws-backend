@@ -108,6 +108,15 @@ class CollectionValueOut(BaseModel):
     total_purchase_cost_jpy: int
 
 
+class BinderValueOut(BaseModel):
+    binder_id: int
+    name: str
+    counted_slots: int    # owned + collection-filed slots only — greyed/planned ones don't count
+    total_slots: int       # counted_slots + greyed/planned ones, for reference
+    total_sell_value_jpy: int
+    total_buy_value_jpy: int
+
+
 class WishlistCreate(BaseModel):
     name: str
 

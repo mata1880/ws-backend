@@ -221,6 +221,44 @@ def find_planned_slot(binder_id: int, card_id: int, db: Session = Depends(get_db
     return _slot_out(slot)
 
 
+@router.get("/{binder_id}/value", response_model=schemas.BinderValueOut)
+def binder_value(binder_id: int, db: Session = Depends(get_db)):
+    """
+    Sums current sell/buy value for this binder's slots — but only the
+    ones that actually count as "owned right now": a real copy linked AND
+    filed into a collection. Greyed slots (planned, or a copy that's
+    owned but not filed anywhere) don't contribute, same rule as what
+    makes a slot greyed in the first place.
+    """
+    b = db.query(models.Binder).get(binder_id)
+    if not b:
+        raise HTTPException(404, "Binder not found")
+
+    slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).all()
+    total_sell = 0
+    total_buy = 0
+    counted = 0
+    for slot in slots:
+        copy = slot.copy
+        if copy is None or copy.collection_id is None:
+            continue  # greyed — doesn't count
+        latest = (
+            db.query(models.PriceSnapshot)
+            .filter(models.PriceSnapshot.card_id == slot.card_id)
+            .order_by(models.PriceSnapshot.scraped_at.desc())
+            .first()
+        )
+        if latest:
+            total_sell += latest.sell_price_jpy or 0
+            total_buy += latest.buy_price_jpy or 0
+        counted += 1
+
+    return schemas.BinderValueOut(
+        binder_id=binder_id, name=b.name, counted_slots=counted, total_slots=len(slots),
+        total_sell_value_jpy=total_sell, total_buy_value_jpy=total_buy,
+    )
+
+
 @router.get("/{binder_id}/fillable", response_model=List[schemas.FillableSlotOut])
 def fillable_slots(binder_id: int, db: Session = Depends(get_db)):
     """
