@@ -23,15 +23,12 @@ FRAME_COMPATIBILITY = {
 # "4x3" properly when you get a chance.
 _LEGACY_LAYOUT_FALLBACK = {"4x5": "4x3", "5x5": "4x3"}
 
-
 def _resolved_layout(layout: str) -> str:
     return _LEGACY_LAYOUT_FALLBACK.get(layout, layout)
-
 
 def _validate_layout(layout: str):
     if layout not in models.VALID_LAYOUTS:
         raise HTTPException(422, f"layout must be one of {models.VALID_LAYOUTS}")
-
 
 def _slot_out(slot: models.BinderSlot) -> schemas.BinderSlotOut:
     copy = slot.copy
@@ -46,11 +43,9 @@ def _slot_out(slot: models.BinderSlot) -> schemas.BinderSlotOut:
         greyed_out=(copy is None) or (copy.collection_id is None),
     )
 
-
 @router.get("", response_model=List[schemas.BinderOut])
 def list_binders(db: Session = Depends(get_db)):
     return db.query(models.Binder).order_by(models.Binder.name).all()
-
 
 @router.post("", response_model=schemas.BinderOut, status_code=201)
 def create_binder(body: schemas.BinderCreate, db: Session = Depends(get_db)):
@@ -62,7 +57,6 @@ def create_binder(body: schemas.BinderCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(b)
     return b
-
 
 @router.patch("/{binder_id}", response_model=schemas.BinderOut)
 def update_binder(binder_id: int, body: schemas.BinderUpdate, db: Session = Depends(get_db)):
@@ -78,7 +72,6 @@ def update_binder(binder_id: int, body: schemas.BinderUpdate, db: Session = Depe
     db.refresh(b)
     return b
 
-
 @router.delete("/{binder_id}", status_code=204)
 def delete_binder(binder_id: int, db: Session = Depends(get_db)):
     b = db.query(models.Binder).get(binder_id)
@@ -87,7 +80,6 @@ def delete_binder(binder_id: int, db: Session = Depends(get_db)):
     db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).delete()
     db.delete(b)
     db.commit()
-
 
 @router.get("/{binder_id}/slots", response_model=List[schemas.BinderSlotOut])
 def get_slots(binder_id: int, db: Session = Depends(get_db)):
@@ -101,7 +93,6 @@ def get_slots(binder_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Binder not found")
     slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).all()
     return sorted([_slot_out(s) for s in slots], key=lambda s: s.slot_index)
-
 
 @router.post("/{binder_id}/slots/{slot_index}", response_model=schemas.BinderSlotOut)
 def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest, db: Session = Depends(get_db)):
@@ -169,7 +160,6 @@ def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest
     db.refresh(slot)
     return _slot_out(slot)
 
-
 @router.delete("/{binder_id}/slots/{slot_index}", status_code=204)
 def unassign_slot(binder_id: int, slot_index: int, db: Session = Depends(get_db)):
     slot = (
@@ -181,7 +171,6 @@ def unassign_slot(binder_id: int, slot_index: int, db: Session = Depends(get_db)
         raise HTTPException(404, "That slot is empty")
     db.delete(slot)
     db.commit()
-
 
 @router.get("/{binder_id}/available-copies", response_model=List[schemas.CopyOut])
 def available_copies(binder_id: int, card_id: int, db: Session = Depends(get_db)):
@@ -201,7 +190,6 @@ def available_copies(binder_id: int, card_id: int, db: Session = Depends(get_db)
     copies = db.query(models.Copy).filter(models.Copy.card_id == card_id, models.Copy.frame_type.in_(allowed)).all()
     return [c for c in copies if c.id not in placed_copy_ids]
 
-
 @router.get("/{binder_id}/planned-slot", response_model=schemas.BinderSlotOut)
 def find_planned_slot(binder_id: int, card_id: int, db: Session = Depends(get_db)):
     """Is there already an unfilled (planned) slot for this card in this
@@ -219,7 +207,6 @@ def find_planned_slot(binder_id: int, card_id: int, db: Session = Depends(get_db
     if not slot:
         raise HTTPException(404, "No planned slot for that card in this binder")
     return _slot_out(slot)
-
 
 @router.get("/{binder_id}/fillable", response_model=List[schemas.FillableSlotOut])
 def fillable_slots(binder_id: int, db: Session = Depends(get_db)):
@@ -259,7 +246,6 @@ def fillable_slots(binder_id: int, db: Session = Depends(get_db)):
             out.append(schemas.FillableSlotOut(slot_index=slot.slot_index, card=schemas.CardOut.model_validate(slot.card), copy_id=available.id))
     return out
 
-
 @router.post("/{binder_id}/fill-all", response_model=schemas.FillAllResult)
 def fill_all(binder_id: int, db: Session = Depends(get_db)):
     """Fills every currently-fillable planned slot in this binder in one go."""
@@ -298,11 +284,11 @@ def fill_all(binder_id: int, db: Session = Depends(get_db)):
 
     return schemas.FillAllResult(filled=len(filled_slots), slots=filled_slots)
 
-
 @router.post("/{binder_id}/price-check", response_model=schemas.PriceCheckResult)
 def price_check_binder(binder_id: int, db: Session = Depends(get_db)):
-    """Re-scrapes current prices for every card currently placed (owned or
-    planned) in this binder."""
+    """Fetches a first price for cards placed in this binder that don't
+    have one yet (see scrape_bridge.run_price_check). Use /price-update to
+    refresh prices that already exist."""
     if not db.query(models.Binder).get(binder_id):
         raise HTTPException(404, "Binder not found")
     slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).all()
@@ -312,3 +298,18 @@ def price_check_binder(binder_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(502, f"Price check failed: {e}")
     return schemas.PriceCheckResult(**result)
+
+@router.post("/{binder_id}/price-update", response_model=schemas.PriceUpdateResult)
+def price_update_binder(binder_id: int, db: Session = Depends(get_db)):
+    """Re-scrapes current prices for every card currently placed (owned or
+    planned) in this binder, even ones that already have a price, and
+    reports which ones changed (see scrape_bridge.run_price_update)."""
+    if not db.query(models.Binder).get(binder_id):
+        raise HTTPException(404, "Binder not found")
+    slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).all()
+    cards = [s.card for s in slots]
+    try:
+        result = scrape_bridge.run_price_update(db, cards)
+    except Exception as e:
+        raise HTTPException(502, f"Price update failed: {e}")
+    return schemas.PriceUpdateResult(**result)
