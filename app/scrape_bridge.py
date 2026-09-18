@@ -74,7 +74,7 @@ def _base_card_number(cn: str) -> str:
     return re.sub(r"[A-Z+]+$", "", cn or "")
 
 
-MAX_PRICE_CHECK_CARDS = 30  # avoid one request running for a very long time
+MAX_PRICE_CHECK_CARDS = 50  # a single request with no progress bar and no partial-recovery if interrupted — kept well short of the 100-min platform timeout on purpose
 
 
 def run_price_check(db: Session, cards, delay: float = 1.2):
