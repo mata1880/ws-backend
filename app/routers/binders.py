@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -10,7 +10,8 @@ router = APIRouter(prefix="/binders", tags=["binders"])
 
 # Which frame types physically fit in each binder layout — a toploader or
 # slab doesn't fit in a thin sleeve-page pocket, and nothing slabbed fits
-# in a binder at all.
+# in a binder at all. A planned (unowned) slot has no frame_type yet, so
+# this only gets checked once a real copy is linked to a slot.
 PAGE_SIZE = {"3x3": 9, "4x3": 12}
 FRAME_COMPATIBILITY = {
     "3x3": {"raw", "sleeve", "toploader"},
@@ -30,6 +31,20 @@ def _resolved_layout(layout: str) -> str:
 def _validate_layout(layout: str):
     if layout not in models.VALID_LAYOUTS:
         raise HTTPException(422, f"layout must be one of {models.VALID_LAYOUTS}")
+
+
+def _slot_out(slot: models.BinderSlot) -> schemas.BinderSlotOut:
+    copy = slot.copy
+    return schemas.BinderSlotOut(
+        slot_index=slot.slot_index,
+        copy_id=copy.id if copy else None,
+        card=schemas.CardOut.model_validate(slot.card),
+        grade=copy.grade if copy else None,
+        frame_type=copy.frame_type if copy else None,
+        copy_number=copy.copy_number if copy else None,
+        planned=copy is None,
+        greyed_out=(copy is None) or (copy.collection_id is None),
+    )
 
 
 @router.get("", response_model=List[schemas.BinderOut])
@@ -71,10 +86,7 @@ def delete_binder(binder_id: int, db: Session = Depends(get_db)):
     b = db.query(models.Binder).get(binder_id)
     if not b:
         raise HTTPException(404, "Binder not found")
-    # Unassign, don't delete, any copies sitting in this binder.
-    db.query(models.Copy).filter(models.Copy.binder_id == binder_id).update(
-        {"binder_id": None, "binder_slot": None}
-    )
+    db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).delete()
     db.delete(b)
     db.commit()
 
@@ -82,110 +94,143 @@ def delete_binder(binder_id: int, db: Session = Depends(get_db)):
 @router.get("/{binder_id}/slots", response_model=List[schemas.BinderSlotOut])
 def get_slots(binder_id: int, db: Session = Depends(get_db)):
     """
-    Returns only OCCUPIED slots — the frontend knows the binder's layout
-    (from the Binder object) and therefore the page size, and renders empty
-    slots itself for whatever indices aren't in this list.
+    Returns only OCCUPIED (or planned) slots — the frontend knows the
+    binder's layout and therefore the page size, and renders empty slots
+    itself for whatever indices aren't in this list.
+    """
+    b = db.query(models.Binder).get(binder_id)
+    if not b:
+        raise HTTPException(404, "Binder not found")
+    slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).all()
+    return sorted([_slot_out(s) for s in slots], key=lambda s: s.slot_index)
+
+
+@router.post("/{binder_id}/slots/{slot_index}", response_model=schemas.BinderSlotOut)
+def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest, db: Session = Depends(get_db)):
+    """
+    Two ways to fill a slot:
+    - copy_id given: link an owned copy (must physically fit this binder's layout).
+    - card_id only (no copy_id): a "planned" placeholder for a card you
+      don't own yet — always shows greyed out until a copy gets linked
+      later (either straight to this slot, or via the send-to-binder
+      button elsewhere, which reuses an existing planned slot for that
+      card instead of creating a second one).
     """
     b = db.query(models.Binder).get(binder_id)
     if not b:
         raise HTTPException(404, "Binder not found")
 
-    copies = db.query(models.Copy).filter(models.Copy.binder_id == binder_id).all()
-    out = []
-    for copy in copies:
-        out.append(schemas.BinderSlotOut(
-            slot_index=copy.binder_slot,
-            copy_id=copy.id,
-            card=schemas.CardOut.model_validate(copy.card),
-            grade=copy.grade,
-            frame_type=copy.frame_type,
-            copy_number=copy.copy_number,
-            greyed_out=copy.collection_id is None,
-        ))
-    return sorted(out, key=lambda s: s.slot_index)
-
-
-@router.post("/{binder_id}/slots/{slot_index}", response_model=schemas.BinderSlotOut)
-def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest, db: Session = Depends(get_db)):
-    b = db.query(models.Binder).get(binder_id)
-    if not b:
-        raise HTTPException(404, "Binder not found")
-    copy = db.query(models.Copy).get(body.copy_id)
-    if not copy:
-        raise HTTPException(404, "Copy not found")
-
-    allowed = FRAME_COMPATIBILITY[_resolved_layout(b.layout)]
-    if copy.frame_type not in allowed:
-        raise HTTPException(
-            422,
-            f"A '{copy.frame_type}' copy doesn't physically fit a {b.layout} binder "
-            f"(allowed here: {', '.join(sorted(allowed))})",
-        )
-
     existing = (
-        db.query(models.Copy)
-        .filter(models.Copy.binder_id == binder_id, models.Copy.binder_slot == slot_index)
+        db.query(models.BinderSlot)
+        .filter(models.BinderSlot.binder_id == binder_id, models.BinderSlot.slot_index == slot_index)
         .first()
     )
-    if existing and existing.id != copy.id:
+
+    if body.copy_id is not None:
+        copy = db.query(models.Copy).get(body.copy_id)
+        if not copy:
+            raise HTTPException(404, "Copy not found")
+        allowed = FRAME_COMPATIBILITY[_resolved_layout(b.layout)]
+        if copy.frame_type not in allowed:
+            raise HTTPException(
+                422,
+                f"A '{copy.frame_type}' copy doesn't physically fit a {b.layout} binder "
+                f"(allowed here: {', '.join(sorted(allowed))})",
+            )
+        already_elsewhere = (
+            db.query(models.BinderSlot)
+            .filter(models.BinderSlot.copy_id == copy.id, models.BinderSlot.id != (existing.id if existing else -1))
+            .first()
+        )
+        if already_elsewhere:
+            raise HTTPException(409, "That copy is already placed in a binder slot — remove it from there first")
+
+        if existing:
+            existing.copy_id = copy.id
+            existing.card_id = copy.card_id
+            db.commit()
+            db.refresh(existing)
+            return _slot_out(existing)
+        slot = models.BinderSlot(binder_id=binder_id, slot_index=slot_index, card_id=copy.card_id, copy_id=copy.id)
+        db.add(slot)
+        db.commit()
+        db.refresh(slot)
+        return _slot_out(slot)
+
+    # Planned placement — no copy_id, just a card.
+    if body.card_id is None:
+        raise HTTPException(422, "Provide either copy_id or card_id")
+    card = db.query(models.Card).get(body.card_id)
+    if not card:
+        raise HTTPException(404, "Card not found")
+    if existing:
         raise HTTPException(409, "That slot is already occupied — unassign it first")
-
-    copy.binder_id = binder_id
-    copy.binder_slot = slot_index
+    slot = models.BinderSlot(binder_id=binder_id, slot_index=slot_index, card_id=card.id, copy_id=None)
+    db.add(slot)
     db.commit()
-    db.refresh(copy)
-
-    return schemas.BinderSlotOut(
-        slot_index=slot_index, copy_id=copy.id, card=schemas.CardOut.model_validate(copy.card),
-        grade=copy.grade, frame_type=copy.frame_type, copy_number=copy.copy_number,
-        greyed_out=copy.collection_id is None,
-    )
+    db.refresh(slot)
+    return _slot_out(slot)
 
 
 @router.delete("/{binder_id}/slots/{slot_index}", status_code=204)
 def unassign_slot(binder_id: int, slot_index: int, db: Session = Depends(get_db)):
-    copy = (
-        db.query(models.Copy)
-        .filter(models.Copy.binder_id == binder_id, models.Copy.binder_slot == slot_index)
+    slot = (
+        db.query(models.BinderSlot)
+        .filter(models.BinderSlot.binder_id == binder_id, models.BinderSlot.slot_index == slot_index)
         .first()
     )
-    if not copy:
+    if not slot:
         raise HTTPException(404, "That slot is empty")
-    copy.binder_id = None
-    copy.binder_slot = None
+    db.delete(slot)
     db.commit()
 
 
 @router.get("/{binder_id}/available-copies", response_model=List[schemas.CopyOut])
 def available_copies(binder_id: int, card_id: int, db: Session = Depends(get_db)):
     """
-    For the '+' button on a binder slot: which of this card's copies are
-    currently unplaced (not already sitting in any binder) and physically
-    fit this binder's layout. The button stays greyed out on the frontend
-    when this list comes back empty.
+    For the '+' button on a binder slot, or the send-to-binder flow:
+    which of this card's copies are currently unplaced (not linked to any
+    slot) and physically fit this binder's layout.
     """
     b = db.query(models.Binder).get(binder_id)
     if not b:
         raise HTTPException(404, "Binder not found")
     allowed = FRAME_COMPATIBILITY[_resolved_layout(b.layout)]
-    return (
-        db.query(models.Copy)
+    placed_copy_ids = {
+        row.copy_id for row in
+        db.query(models.BinderSlot.copy_id).filter(models.BinderSlot.copy_id.isnot(None))
+    }
+    copies = db.query(models.Copy).filter(models.Copy.card_id == card_id, models.Copy.frame_type.in_(allowed)).all()
+    return [c for c in copies if c.id not in placed_copy_ids]
+
+
+@router.get("/{binder_id}/planned-slot", response_model=schemas.BinderSlotOut)
+def find_planned_slot(binder_id: int, card_id: int, db: Session = Depends(get_db)):
+    """Is there already an unfilled (planned) slot for this card in this
+    binder? Used by the send-to-binder flow to fill an existing
+    placeholder instead of creating a duplicate one. 404 if none."""
+    slot = (
+        db.query(models.BinderSlot)
         .filter(
-            models.Copy.card_id == card_id,
-            models.Copy.binder_id.is_(None),
-            models.Copy.frame_type.in_(allowed),
+            models.BinderSlot.binder_id == binder_id,
+            models.BinderSlot.card_id == card_id,
+            models.BinderSlot.copy_id.is_(None),
         )
-        .all()
+        .first()
     )
+    if not slot:
+        raise HTTPException(404, "No planned slot for that card in this binder")
+    return _slot_out(slot)
 
 
 @router.post("/{binder_id}/price-check", response_model=schemas.PriceCheckResult)
 def price_check_binder(binder_id: int, db: Session = Depends(get_db)):
-    """Re-scrapes current prices for every card currently placed in this binder."""
+    """Re-scrapes current prices for every card currently placed (owned or
+    planned) in this binder."""
     if not db.query(models.Binder).get(binder_id):
         raise HTTPException(404, "Binder not found")
-    copies = db.query(models.Copy).filter(models.Copy.binder_id == binder_id).all()
-    cards = [c.card for c in copies]
+    slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).all()
+    cards = [s.card for s in slots]
     try:
         result = scrape_bridge.run_price_check(db, cards)
     except Exception as e:

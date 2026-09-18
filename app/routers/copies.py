@@ -77,8 +77,9 @@ def update_copy(copy_id: int, body: schemas.CopyUpdate, db: Session = Depends(ge
     if body.frame_type is not None:
         if body.frame_type not in models.VALID_FRAME_TYPES:
             raise HTTPException(422, f"frame_type must be one of {models.VALID_FRAME_TYPES}")
-        if copy.binder_id is not None:
-            binder = db.query(models.Binder).get(copy.binder_id)
+        current_slot = db.query(models.BinderSlot).filter(models.BinderSlot.copy_id == copy.id).first()
+        if current_slot is not None:
+            binder = db.query(models.Binder).get(current_slot.binder_id)
             if binder and body.frame_type not in FRAME_COMPATIBILITY[_resolved_layout(binder.layout)]:
                 raise HTTPException(
                     422,
@@ -103,10 +104,21 @@ def update_copy(copy_id: int, body: schemas.CopyUpdate, db: Session = Depends(ge
 
 @router.delete("/{copy_id}", status_code=204)
 def delete_copy(copy_id: int, db: Session = Depends(get_db)):
-    """Removes a copy entirely (e.g. sold) — frees up its binder slot too."""
+    """
+    Removes a copy entirely (e.g. sold). If it was linked to a binder
+    slot, that slot is NOT deleted — it just reverts to "planned" (no
+    copy_id, always greyed), exactly like a placeholder you never owned a
+    copy for yet. That's the whole point of a slot being independent of
+    ownership: selling a card off leaves a reminder of where it goes,
+    same as removing it from a collection already did before binders
+    supported planned placements.
+    """
     copy = db.query(models.Copy).get(copy_id)
     if not copy:
         raise HTTPException(404, "Copy not found")
+    slot = db.query(models.BinderSlot).filter(models.BinderSlot.copy_id == copy.id).first()
+    if slot is not None:
+        slot.copy_id = None
     db.delete(copy)
     db.commit()
 
@@ -116,13 +128,13 @@ def auto_place(copy_id: int, db: Session = Depends(get_db)):
     """
     Priority-based binder auto-placement: finds the highest-priority binder
     (lowest `priority` number) whose layout allows this copy's frame type,
-    preferring an already-grey slot for this exact card (a "planned"
-    placeholder from before you owned it) over any other open slot.
+    preferring an existing planned slot for this exact card (placed from
+    Browse/Wishlist before you owned it) over any other open slot.
     """
     copy = db.query(models.Copy).get(copy_id)
     if not copy:
         raise HTTPException(404, "Copy not found")
-    if copy.binder_id is not None:
+    if db.query(models.BinderSlot).filter(models.BinderSlot.copy_id == copy.id).first():
         raise HTTPException(409, "This copy is already placed in a binder — remove it first")
 
     binders = db.query(models.Binder).order_by(models.Binder.priority).all()
@@ -131,49 +143,39 @@ def auto_place(copy_id: int, db: Session = Depends(get_db)):
         if copy.frame_type not in FRAME_COMPATIBILITY[_resolved_layout(binder.layout)]:
             continue
 
-        occupied = {
-            c.binder_slot for c in
-            db.query(models.Copy).filter(models.Copy.binder_id == binder.id).all()
-        }
+        binder_slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder.id).all()
+        occupied = {s.slot_index for s in binder_slots}
 
-        grey_match = (
-            db.query(models.Copy)
-            .filter(
-                models.Copy.binder_id == binder.id,
-                models.Copy.card_id == copy.card_id,
-                models.Copy.collection_id.is_(None),
-            )
-            .first()
-        )
-        if grey_match:
-            target_slot = grey_match.binder_slot
-            grey_match.binder_id = None
-            grey_match.binder_slot = None
-            db.flush()
-            copy.binder_id = binder.id
-            copy.binder_slot = target_slot
+        planned_match = next((s for s in binder_slots if s.card_id == copy.card_id and s.copy_id is None), None)
+        if planned_match:
+            planned_match.copy_id = copy.id
             db.commit()
-            db.refresh(copy)
-            return schemas.BinderSlotOut(
-                slot_index=target_slot, copy_id=copy.id,
-                card=schemas.CardOut.model_validate(copy.card), grade=copy.grade,
-                frame_type=copy.frame_type, copy_number=copy.copy_number,
-                greyed_out=copy.collection_id is None,
-            )
+            db.refresh(planned_match)
+            return _slot_out_for(planned_match, db)
 
-        slot = 0
-        while slot in occupied:
-            slot += 1
-        if slot < PAGE_SIZE[_resolved_layout(binder.layout)] * 50:
-            copy.binder_id = binder.id
-            copy.binder_slot = slot
+        slot_index = 0
+        while slot_index in occupied:
+            slot_index += 1
+        if slot_index < PAGE_SIZE[_resolved_layout(binder.layout)] * 50:
+            new_slot = models.BinderSlot(binder_id=binder.id, slot_index=slot_index, card_id=copy.card_id, copy_id=copy.id)
+            db.add(new_slot)
             db.commit()
-            db.refresh(copy)
-            return schemas.BinderSlotOut(
-                slot_index=slot, copy_id=copy.id,
-                card=schemas.CardOut.model_validate(copy.card), grade=copy.grade,
-                frame_type=copy.frame_type, copy_number=copy.copy_number,
-                greyed_out=copy.collection_id is None,
-            )
+            db.refresh(new_slot)
+            return _slot_out_for(new_slot, db)
 
     raise HTTPException(409, f"No binder can currently fit a '{copy.frame_type}' copy — create one or free up a slot")
+
+
+def _slot_out_for(slot: models.BinderSlot, db: Session) -> schemas.BinderSlotOut:
+    copy = db.query(models.Copy).get(slot.copy_id) if slot.copy_id else None
+    card = db.query(models.Card).get(slot.card_id)
+    return schemas.BinderSlotOut(
+        slot_index=slot.slot_index,
+        copy_id=copy.id if copy else None,
+        card=schemas.CardOut.model_validate(card),
+        grade=copy.grade if copy else None,
+        frame_type=copy.frame_type if copy else None,
+        copy_number=copy.copy_number if copy else None,
+        planned=copy is None,
+        greyed_out=(copy is None) or (copy.collection_id is None),
+    )

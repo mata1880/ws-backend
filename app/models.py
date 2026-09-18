@@ -185,6 +185,36 @@ class Copy(Base):
     binder = relationship("Binder", back_populates="copies")
 
     __table_args__ = (
-        # A binder slot can only hold one copy at a time.
+        # A binder slot can only hold one copy at a time. Kept for
+        # backward compatibility with data written before BinderSlot
+        # existed — binder placement now lives in BinderSlot instead;
+        # these two columns are no longer written to by new code.
         UniqueConstraint("binder_id", "binder_slot", name="uq_copies_binder_slot"),
+    )
+
+
+class BinderSlot(Base):
+    """
+    One physical pocket in a binder. Deliberately separate from Copy:
+    a slot can exist as a placeholder for a card you don't own yet
+    (copy_id is null — always shows greyed out), and later gets "filled"
+    by linking a real copy once you own one, without ever needing two
+    different code paths for "planned" vs "owned" placement.
+    """
+    __tablename__ = "binder_slots"
+
+    id = Column(Integer, primary_key=True)
+    binder_id = Column(Integer, ForeignKey("binders.id"), nullable=False)
+    slot_index = Column(Integer, nullable=False)
+    card_id = Column(Integer, ForeignKey("cards.id"), nullable=False)
+    copy_id = Column(Integer, ForeignKey("copies.id"), nullable=True)
+    created_at = Column(DateTime, default=now_utc)
+
+    binder = relationship("Binder")
+    card = relationship("Card")
+    copy = relationship("Copy")
+
+    __table_args__ = (
+        UniqueConstraint("binder_id", "slot_index", name="uq_binderslot_binder_slot"),
+        UniqueConstraint("copy_id", name="uq_binderslot_copy"),  # a copy can only fill one slot
     )

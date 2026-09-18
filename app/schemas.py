@@ -137,7 +137,8 @@ class BinderSlotOut(BaseModel):
     grade: Optional[str] = None
     frame_type: Optional[str] = None
     copy_number: Optional[int] = None
-    greyed_out: bool = False  # true when the copy exists but isn't in any collection
+    greyed_out: bool = False  # true when there's no linked, collection-filed copy yet
+    planned: bool = False     # true when this slot has no copy at all (card you don't own)
 
 
 class CopyCreate(BaseModel):
@@ -180,4 +181,5 @@ class CopyWithCard(CopyOut):
 
 
 class AssignSlotRequest(BaseModel):
-    copy_id: int
+    copy_id: Optional[int] = None  # link an owned copy to this slot
+    card_id: Optional[int] = None  # or: place a "planned" slot for a card you don't own yet (no copy_id)

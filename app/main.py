@@ -1,11 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import models
-from .database import engine
+from . import models, migrations
+from .database import engine, SessionLocal
 from .routers import cards, scrape, collections, wishlists, binders, copies
 
 models.Base.metadata.create_all(bind=engine)
+
+with SessionLocal() as _db:
+    migrations.migrate_legacy_binder_placements(_db)
 
 app = FastAPI(
     title="Weiss Schwarz Collection API",
