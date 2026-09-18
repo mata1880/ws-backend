@@ -26,6 +26,7 @@ def list_cards(
     if rarity:
         q = q.filter(models.Card.rarity == rarity)
     cards = q.all()
+    card_ids = [c.id for c in cards]
 
     # One query for wishlist membership across all cards, instead of one
     # query per card — a card can only be on one wishlist at a time, so
@@ -35,21 +36,46 @@ def list_cards(
         for wi in db.query(models.WishlistItem).all()
     }
 
+    # Latest price per card in two aggregate queries total, not one query
+    # per card. Step 1: the latest timestamp per card (cheap aggregation,
+    # stays fast even as price history grows). Step 2: join back to the
+    # actual snapshot rows at those timestamps.
+    latest_by_card = {}
+    owned_by_card = {}
+    if card_ids:
+        latest_times = (
+            db.query(models.PriceSnapshot.card_id, func.max(models.PriceSnapshot.scraped_at).label("max_time"))
+            .filter(models.PriceSnapshot.card_id.in_(card_ids))
+            .group_by(models.PriceSnapshot.card_id)
+            .subquery()
+        )
+        latest_snapshots = (
+            db.query(models.PriceSnapshot)
+            .join(
+                latest_times,
+                (models.PriceSnapshot.card_id == latest_times.c.card_id)
+                & (models.PriceSnapshot.scraped_at == latest_times.c.max_time),
+            )
+            .all()
+        )
+        latest_by_card = {s.card_id: s for s in latest_snapshots}
+
+        owned_by_card = dict(
+            db.query(models.Copy.card_id, func.count(models.Copy.id))
+            .filter(models.Copy.card_id.in_(card_ids))
+            .group_by(models.Copy.card_id)
+            .all()
+        )
+
     out = []
     for c in cards:
-        latest = (
-            db.query(models.PriceSnapshot)
-            .filter(models.PriceSnapshot.card_id == c.id)
-            .order_by(models.PriceSnapshot.scraped_at.desc())
-            .first()
-        )
-        owned = db.query(func.count(models.Copy.id)).filter(models.Copy.card_id == c.id).scalar()
+        latest = latest_by_card.get(c.id)
         out.append(schemas.CardWithPrice(
             **schemas.CardOut.model_validate(c).model_dump(),
             sell_price_jpy=latest.sell_price_jpy if latest else None,
             buy_price_jpy=latest.buy_price_jpy if latest else None,
             price_scraped_at=latest.scraped_at if latest else None,
-            owned_copies=owned or 0,
+            owned_copies=owned_by_card.get(c.id, 0),
             wishlist_id=wishlist_by_card.get(c.id),
             availability=latest.availability if latest else None,
         ))
