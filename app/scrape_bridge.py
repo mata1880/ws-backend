@@ -74,41 +74,33 @@ def _base_card_number(cn: str) -> str:
     return re.sub(r"[A-Z+]+$", "", cn or "")
 
 
-MAX_PRICE_CHECK_PREFIXES = 10  # avoid one request running for a very long time
+MAX_PRICE_CHECK_CARDS = 30  # avoid one request running for a very long time
 
 
-def run_price_check(db: Session, cards, delay: float = 1.5):
+def run_price_check(db: Session, cards, delay: float = 1.2):
     """
     Re-scrapes current prices for a specific set of cards (e.g. everything
-    in one collection/wishlist/binder) rather than a whole title.
-
-    yuyu-tei's search only works by keyword, not "give me exactly these N
-    card numbers" — so this groups the cards by the prefix before their
-    first "/" (e.g. "OSK" from "OSK/S133-001SSP", the same code you'd type
-    into --card-code) and runs one broad scrape per unique prefix. That
-    means it refreshes every card in the same title as anything you own,
-    not just the exact ones — more requests than strictly necessary, but
-    far simpler and more reliable than hundreds of single-card searches,
-    and it keeps this fast enough to run inside one HTTP request.
+    in one collection/wishlist/binder) — one exact-card-number search per
+    card, not a broad set-wide scrape. More requests than a set-level
+    scrape, but only touches the cards you actually asked about.
     """
-    prefixes = []
+    codes = []
     for c in cards:
-        prefix = (c.card_number or "").split("/")[0]
-        if prefix and prefix not in prefixes:
-            prefixes.append(prefix)
+        if c.card_number and c.card_number not in codes:
+            codes.append(c.card_number)
 
-    truncated = len(prefixes) > MAX_PRICE_CHECK_PREFIXES
-    prefixes = prefixes[:MAX_PRICE_CHECK_PREFIXES]
+    truncated = len(codes) > MAX_PRICE_CHECK_CARDS
+    codes = codes[:MAX_PRICE_CHECK_CARDS]
 
     results = []
     total_snapshots = 0
-    for prefix in prefixes:
-        r = run_price_scrape(db, "ws", prefix, "both", delay)
-        results.append({"prefix": prefix, **r})
+    for code in codes:
+        r = run_price_scrape(db, "ws", code, "both", delay)
+        results.append({"prefix": code, **r})
         total_snapshots += r["price_snapshots_added"]
 
     return {
-        "prefixes_checked": prefixes,
+        "prefixes_checked": codes,
         "total_price_snapshots_added": total_snapshots,
         "truncated": truncated,
     }
