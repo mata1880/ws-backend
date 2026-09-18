@@ -8,9 +8,11 @@ from ..database import get_db
 
 router = APIRouter(prefix="/wishlists", tags=["wishlists"])
 
+
 @router.get("", response_model=List[schemas.WishlistOut])
 def list_wishlists(db: Session = Depends(get_db)):
     return db.query(models.Wishlist).order_by(models.Wishlist.name).all()
+
 
 @router.post("", response_model=schemas.WishlistOut, status_code=201)
 def create_wishlist(body: schemas.WishlistCreate, db: Session = Depends(get_db)):
@@ -22,6 +24,7 @@ def create_wishlist(body: schemas.WishlistCreate, db: Session = Depends(get_db))
     db.refresh(w)
     return w
 
+
 @router.patch("/{wishlist_id}", response_model=schemas.WishlistOut)
 def rename_wishlist(wishlist_id: int, body: schemas.WishlistRename, db: Session = Depends(get_db)):
     w = db.query(models.Wishlist).get(wishlist_id)
@@ -32,6 +35,7 @@ def rename_wishlist(wishlist_id: int, body: schemas.WishlistRename, db: Session 
     db.refresh(w)
     return w
 
+
 @router.delete("/{wishlist_id}", status_code=204)
 def delete_wishlist(wishlist_id: int, db: Session = Depends(get_db)):
     w = db.query(models.Wishlist).get(wishlist_id)
@@ -40,12 +44,14 @@ def delete_wishlist(wishlist_id: int, db: Session = Depends(get_db)):
     db.delete(w)
     db.commit()
 
+
 @router.get("/{wishlist_id}/items", response_model=List[schemas.CardWithPrice])
 def list_wishlist_items(wishlist_id: int, db: Session = Depends(get_db)):
     if not db.query(models.Wishlist).get(wishlist_id):
         raise HTTPException(404, "Wishlist not found")
     items = db.query(models.WishlistItem).filter(models.WishlistItem.wishlist_id == wishlist_id).all()
     return [utils.card_with_price(db, i.card) for i in items]
+
 
 @router.post("/{wishlist_id}/items", status_code=201)
 def add_wishlist_item(wishlist_id: int, body: schemas.WishlistItemAdd, db: Session = Depends(get_db)):
@@ -68,6 +74,7 @@ def add_wishlist_item(wishlist_id: int, body: schemas.WishlistItemAdd, db: Sessi
     db.commit()
     return {"ok": True}
 
+
 @router.delete("/{wishlist_id}/items/{card_id}", status_code=204)
 def remove_wishlist_item(wishlist_id: int, card_id: int, db: Session = Depends(get_db)):
     item = (
@@ -80,11 +87,11 @@ def remove_wishlist_item(wishlist_id: int, card_id: int, db: Session = Depends(g
     db.delete(item)
     db.commit()
 
+
 @router.post("/{wishlist_id}/price-check", response_model=schemas.PriceCheckResult)
 def price_check_wishlist(wishlist_id: int, db: Session = Depends(get_db)):
-    """Fetches a first price for cards on this wishlist that don't have
-    one yet (see scrape_bridge.run_price_check). Use /price-update to
-    refresh prices that already exist."""
+    """Fetches a price only for cards on this wishlist that don't have
+    one yet — fast, catches up new additions without re-checking the rest."""
     if not db.query(models.Wishlist).get(wishlist_id):
         raise HTTPException(404, "Wishlist not found")
     items = db.query(models.WishlistItem).filter(models.WishlistItem.wishlist_id == wishlist_id).all()
@@ -95,11 +102,11 @@ def price_check_wishlist(wishlist_id: int, db: Session = Depends(get_db)):
         raise HTTPException(502, f"Price check failed: {e}")
     return schemas.PriceCheckResult(**result)
 
+
 @router.post("/{wishlist_id}/price-update", response_model=schemas.PriceUpdateResult)
 def price_update_wishlist(wishlist_id: int, db: Session = Depends(get_db)):
-    """Re-scrapes current prices for every card on this wishlist, even
-    ones that already have a price, and reports which ones changed (see
-    scrape_bridge.run_price_update)."""
+    """Re-checks EVERY card on this wishlist regardless of whether it
+    already has a price, and reports which ones' sell/buy price changed."""
     if not db.query(models.Wishlist).get(wishlist_id):
         raise HTTPException(404, "Wishlist not found")
     items = db.query(models.WishlistItem).filter(models.WishlistItem.wishlist_id == wishlist_id).all()
