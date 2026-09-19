@@ -105,7 +105,7 @@ def _base_card_number(cn: str) -> str:
 
 
 MAX_PRICE_CHECK_CARDS = 50  # a single request with no progress bar and no partial-recovery if interrupted — kept well short of the 100-min platform timeout on purpose
-MAX_PRICE_UPDATE_TITLES = 10  # title-level scrapes cover many cards each, so this can stay small
+MAX_PRICE_UPDATE_TITLES = 25  # title-level scrapes cover many cards each, so this can stay small — only matters when only_titles isn't given (the frontend's per-title loop bypasses this cap entirely, calling once per title regardless of count)
 
 
 def _title_prefix(card_number: str):
