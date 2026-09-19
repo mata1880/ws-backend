@@ -218,3 +218,25 @@ class BinderSlot(Base):
         UniqueConstraint("binder_id", "slot_index", name="uq_binderslot_binder_slot"),
         UniqueConstraint("copy_id", name="uq_binderslot_copy"),  # a copy can only fill one slot
     )
+
+
+class BinderPageLabel(Base):
+    """
+    An optional custom name for one page of a binder (e.g. "Rare Idols",
+    "Signed Cards") — purely for your own reference, doesn't affect what
+    can go in that page. Page numbers are 1-indexed and not otherwise
+    stored anywhere (a "page" is just a range of slot_index values), so
+    this table only ever has rows for pages someone bothered to name.
+    """
+    __tablename__ = "binder_page_labels"
+
+    id = Column(Integer, primary_key=True)
+    binder_id = Column(Integer, ForeignKey("binders.id"), nullable=False)
+    page_number = Column(Integer, nullable=False)  # 1-indexed; 1 = cover
+    name = Column(String, nullable=False, default="")
+
+    binder = relationship("Binder")
+
+    __table_args__ = (
+        UniqueConstraint("binder_id", "page_number", name="uq_binderpagelabel_binder_page"),
+    )

@@ -85,6 +85,7 @@ def delete_binder(binder_id: int, db: Session = Depends(get_db)):
     if not b:
         raise HTTPException(404, "Binder not found")
     db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).delete()
+    db.query(models.BinderPageLabel).filter(models.BinderPageLabel.binder_id == binder_id).delete()
     db.delete(b)
     db.commit()
 
@@ -219,6 +220,44 @@ def find_planned_slot(binder_id: int, card_id: int, db: Session = Depends(get_db
     if not slot:
         raise HTTPException(404, "No planned slot for that card in this binder")
     return _slot_out(slot)
+
+
+@router.get("/{binder_id}/page-labels", response_model=List[schemas.BinderPageLabelOut])
+def list_page_labels(binder_id: int, db: Session = Depends(get_db)):
+    """Every page in this binder that's been given a custom name."""
+    if not db.query(models.Binder).get(binder_id):
+        raise HTTPException(404, "Binder not found")
+    labels = db.query(models.BinderPageLabel).filter(models.BinderPageLabel.binder_id == binder_id).all()
+    return [schemas.BinderPageLabelOut(page_number=l.page_number, name=l.name) for l in labels]
+
+
+@router.put("/{binder_id}/pages/{page_number}/label", response_model=schemas.BinderPageLabelOut)
+def set_page_label(binder_id: int, page_number: int, body: schemas.BinderPageLabelSet, db: Session = Depends(get_db)):
+    """Sets (or clears, if name is empty) a page's custom name."""
+    if not db.query(models.Binder).get(binder_id):
+        raise HTTPException(404, "Binder not found")
+    if page_number < 1:
+        raise HTTPException(422, "page_number must be 1 or greater")
+
+    label = (
+        db.query(models.BinderPageLabel)
+        .filter(models.BinderPageLabel.binder_id == binder_id, models.BinderPageLabel.page_number == page_number)
+        .first()
+    )
+    name = body.name.strip()
+    if not name:
+        if label:
+            db.delete(label)
+            db.commit()
+        return schemas.BinderPageLabelOut(page_number=page_number, name="")
+
+    if label:
+        label.name = name
+    else:
+        label = models.BinderPageLabel(binder_id=binder_id, page_number=page_number, name=name)
+        db.add(label)
+    db.commit()
+    return schemas.BinderPageLabelOut(page_number=page_number, name=name)
 
 
 @router.get("/{binder_id}/value", response_model=schemas.BinderValueOut)

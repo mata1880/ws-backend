@@ -33,6 +33,8 @@ class CardWithPrice(CardOut):
     owned_copies: int = 0
     wishlist_id: Optional[int] = None  # which wishlist this card is currently on, if any
     availability: Optional[str] = None  # e.g. "In Stock" / "Sold Out", from the latest price snapshot
+    sell_trend: Optional[str] = None  # "up" / "down" / "same" vs the previous snapshot, or null if there's no previous one
+    buy_trend: Optional[str] = None
 
 
 class PriceSnapshotOut(BaseModel):
@@ -156,6 +158,15 @@ class BinderOut(BaseModel):
     name: str
     layout: str
     created_at: datetime
+
+
+class BinderPageLabelOut(BaseModel):
+    page_number: int
+    name: str
+
+
+class BinderPageLabelSet(BaseModel):
+    name: str
 
 
 class BinderSlotOut(BaseModel):
