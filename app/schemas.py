@@ -35,6 +35,7 @@ class CardWithPrice(CardOut):
     availability: Optional[str] = None  # e.g. "In Stock" / "Sold Out", from the latest price snapshot
     sell_trend: Optional[str] = None  # "up" / "down" / "same" vs the previous snapshot, or null if there's no previous one
     buy_trend: Optional[str] = None
+    in_binder: bool = False  # true if a slot for this card exists in ANY binder, even a greyed one
 
 
 class PriceSnapshotOut(BaseModel):
@@ -117,9 +118,13 @@ class CollectionValueOut(BaseModel):
 class BinderValueOut(BaseModel):
     binder_id: int
     name: str
-    counted_slots: int    # owned + collection-filed slots only — greyed/planned ones don't count
+    counted_slots: int    # owned + collection-filed slots only — greyed/planned ones don't count toward owned_*
     total_slots: int       # counted_slots + greyed/planned ones, for reference
-    total_sell_value_jpy: int
+    owned_sell_value_jpy: int
+    owned_buy_value_jpy: int
+    greyed_sell_value_jpy: int  # value of what's greyed out (planned, or owned-but-not-filed) — what you're missing
+    greyed_buy_value_jpy: int
+    total_sell_value_jpy: int   # owned + greyed combined
     total_buy_value_jpy: int
 
 
@@ -178,6 +183,7 @@ class BinderSlotOut(BaseModel):
     copy_number: Optional[int] = None
     greyed_out: bool = False  # true when there's no linked, collection-filed copy yet
     planned: bool = False     # true when this slot has no copy at all (card you don't own)
+    wishlist_id: Optional[int] = None  # which wishlist this card is currently on, if any
 
 
 class FillableSlotOut(BaseModel):

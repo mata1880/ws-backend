@@ -33,8 +33,15 @@ def _validate_layout(layout: str):
         raise HTTPException(422, f"layout must be one of {models.VALID_LAYOUTS}")
 
 
-def _slot_out(slot: models.BinderSlot) -> schemas.BinderSlotOut:
+def _slot_out(slot: models.BinderSlot, wishlist_by_card: dict = None, db: Session = None) -> schemas.BinderSlotOut:
     copy = slot.copy
+    if wishlist_by_card is not None:
+        wishlist_id = wishlist_by_card.get(slot.card_id)
+    elif db is not None:
+        wi = db.query(models.WishlistItem).filter(models.WishlistItem.card_id == slot.card_id).first()
+        wishlist_id = wi.wishlist_id if wi else None
+    else:
+        wishlist_id = None
     return schemas.BinderSlotOut(
         slot_index=slot.slot_index,
         copy_id=copy.id if copy else None,
@@ -44,6 +51,7 @@ def _slot_out(slot: models.BinderSlot) -> schemas.BinderSlotOut:
         copy_number=copy.copy_number if copy else None,
         planned=copy is None,
         greyed_out=(copy is None) or (copy.collection_id is None),
+        wishlist_id=wishlist_id,
     )
 
 
@@ -101,7 +109,14 @@ def get_slots(binder_id: int, db: Session = Depends(get_db)):
     if not b:
         raise HTTPException(404, "Binder not found")
     slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).all()
-    return sorted([_slot_out(s) for s in slots], key=lambda s: s.slot_index)
+    card_ids = list({s.card_id for s in slots})
+    wishlist_by_card = {}
+    if card_ids:
+        wishlist_by_card = {
+            wi.card_id: wi.wishlist_id
+            for wi in db.query(models.WishlistItem).filter(models.WishlistItem.card_id.in_(card_ids)).all()
+        }
+    return sorted([_slot_out(s, wishlist_by_card=wishlist_by_card) for s in slots], key=lambda s: s.slot_index)
 
 
 @router.post("/{binder_id}/slots/{slot_index}", response_model=schemas.BinderSlotOut)
@@ -149,12 +164,12 @@ def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest
             existing.card_id = copy.card_id
             db.commit()
             db.refresh(existing)
-            return _slot_out(existing)
+            return _slot_out(existing, db=db)
         slot = models.BinderSlot(binder_id=binder_id, slot_index=slot_index, card_id=copy.card_id, copy_id=copy.id)
         db.add(slot)
         db.commit()
         db.refresh(slot)
-        return _slot_out(slot)
+        return _slot_out(slot, db=db)
 
     # Planned placement — no copy_id, just a card.
     if body.card_id is None:
@@ -168,7 +183,7 @@ def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest
     db.add(slot)
     db.commit()
     db.refresh(slot)
-    return _slot_out(slot)
+    return _slot_out(slot, db=db)
 
 
 @router.delete("/{binder_id}/slots/{slot_index}", status_code=204)
@@ -219,7 +234,7 @@ def find_planned_slot(binder_id: int, card_id: int, db: Session = Depends(get_db
     )
     if not slot:
         raise HTTPException(404, "No planned slot for that card in this binder")
-    return _slot_out(slot)
+    return _slot_out(slot, db=db)
 
 
 @router.get("/{binder_id}/page-labels", response_model=List[schemas.BinderPageLabelOut])
@@ -263,38 +278,51 @@ def set_page_label(binder_id: int, page_number: int, body: schemas.BinderPageLab
 @router.get("/{binder_id}/value", response_model=schemas.BinderValueOut)
 def binder_value(binder_id: int, db: Session = Depends(get_db)):
     """
-    Sums current sell/buy value for this binder's slots — but only the
-    ones that actually count as "owned right now": a real copy linked AND
-    filed into a collection. Greyed slots (planned, or a copy that's
-    owned but not filed anywhere) don't contribute, same rule as what
-    makes a slot greyed in the first place.
+    Sums current sell/buy value for this binder's slots, split into what
+    you actually own right now (a real copy linked AND filed into a
+    collection) vs. what's greyed out (planned, or owned but not filed
+    anywhere) — plus a combined total across both.
     """
     b = db.query(models.Binder).get(binder_id)
     if not b:
         raise HTTPException(404, "Binder not found")
 
     slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).all()
-    total_sell = 0
-    total_buy = 0
+
+    # Latest price per card in ONE query instead of one per slot — this
+    # runs after every binder action (loadSlots() always refreshes value).
+    card_ids = list({s.card_id for s in slots})
+    latest_by_card = {}
+    if card_ids:
+        rows = (
+            db.query(models.PriceSnapshot)
+            .filter(models.PriceSnapshot.card_id.in_(card_ids))
+            .order_by(models.PriceSnapshot.card_id, models.PriceSnapshot.scraped_at.desc())
+            .all()
+        )
+        for r in rows:
+            latest_by_card.setdefault(r.card_id, r)  # first one seen per card_id is the latest, given the ordering
+
+    owned_sell = owned_buy = greyed_sell = greyed_buy = 0
     counted = 0
     for slot in slots:
+        latest = latest_by_card.get(slot.card_id)
+        sell = latest.sell_price_jpy or 0 if latest else 0
+        buy = latest.buy_price_jpy or 0 if latest else 0
         copy = slot.copy
-        if copy is None or copy.collection_id is None:
-            continue  # greyed — doesn't count
-        latest = (
-            db.query(models.PriceSnapshot)
-            .filter(models.PriceSnapshot.card_id == slot.card_id)
-            .order_by(models.PriceSnapshot.scraped_at.desc())
-            .first()
-        )
-        if latest:
-            total_sell += latest.sell_price_jpy or 0
-            total_buy += latest.buy_price_jpy or 0
-        counted += 1
+        if copy is not None and copy.collection_id is not None:
+            owned_sell += sell
+            owned_buy += buy
+            counted += 1
+        else:
+            greyed_sell += sell
+            greyed_buy += buy
 
     return schemas.BinderValueOut(
         binder_id=binder_id, name=b.name, counted_slots=counted, total_slots=len(slots),
-        total_sell_value_jpy=total_sell, total_buy_value_jpy=total_buy,
+        owned_sell_value_jpy=owned_sell, owned_buy_value_jpy=owned_buy,
+        greyed_sell_value_jpy=greyed_sell, greyed_buy_value_jpy=greyed_buy,
+        total_sell_value_jpy=owned_sell + greyed_sell, total_buy_value_jpy=owned_buy + greyed_buy,
     )
 
 
@@ -321,17 +349,24 @@ def fillable_slots(binder_id: int, db: Session = Depends(get_db)):
         .all()
     )
 
+    # One query for every candidate copy across ALL planned slots, instead
+    # of one query per slot — this runs after every single binder action
+    # (loadSlots() always re-checks fillable), so an N+1 here directly
+    # slows down every move/remove/fill you do.
+    card_ids = list({slot.card_id for slot in planned})
+    candidates_by_card = {}
+    if card_ids:
+        for c in (
+            db.query(models.Copy)
+            .filter(models.Copy.card_id.in_(card_ids), models.Copy.collection_id.isnot(None))
+            .all()
+        ):
+            candidates_by_card.setdefault(c.card_id, []).append(c)
+
     out = []
     for slot in planned:
-        candidate = (
-            db.query(models.Copy)
-            .filter(
-                models.Copy.card_id == slot.card_id,
-                models.Copy.collection_id.isnot(None),  # must actually be filed, not just owned
-            )
-            .all()
-        )
-        available = next((c for c in candidate if c.id not in placed_copy_ids), None)
+        candidates = candidates_by_card.get(slot.card_id, [])
+        available = next((c for c in candidates if c.id not in placed_copy_ids), None)
         if available:
             out.append(schemas.FillableSlotOut(slot_index=slot.slot_index, card=schemas.CardOut.model_validate(slot.card), copy_id=available.id))
     return out
