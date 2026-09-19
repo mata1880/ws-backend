@@ -50,8 +50,25 @@ def run_price_scrape(db: Session, game: str, card_code: str, mode: str, delay: f
     for set_code, set_name, recs in groups:
         sets_touched.append(f"{set_code} ({set_name or '?'}) — {len(recs)} cards")
 
+    # Batch-fetch every card this scrape touches in ONE query instead of
+    # one query per record — for a big title (hundreds of cards) this used
+    # to mean hundreds of separate round-trips to the database before any
+    # actual price work even happened, which dominated runtime far more
+    # than the yuyu-tei requests themselves did.
+    card_numbers = list({rec.cardNumber for rec in records if rec.cardNumber})
+    cards_by_number = {}
+    if card_numbers:
+        for c in db.query(models.Card).filter(models.Card.card_number.in_(card_numbers)).all():
+            cards_by_number[c.card_number] = c
     for rec in records:
-        card = _get_or_create_card(db, rec.cardNumber, rec.game, rec.setCode)
+        if rec.cardNumber and rec.cardNumber not in cards_by_number:
+            new_card = models.Card(card_number=rec.cardNumber, game=rec.game, set_code=rec.setCode, name="")
+            db.add(new_card)
+            cards_by_number[rec.cardNumber] = new_card
+    db.flush()  # assigns .id to every new card in one batch, not one per record
+
+    for rec in records:
+        card = cards_by_number[rec.cardNumber]
         # keep name/rarity/image current — cheap, and yuyu-tei sometimes has
         # these when the catalog scrape hasn't been run for this card yet
         if rec.name:
@@ -141,7 +158,7 @@ def run_price_check(db: Session, cards, delay: float = 1.2):
     }
 
 
-def run_price_update(db: Session, cards, delay: float = 1.2):
+def run_price_update(db: Session, cards, delay: float = 1.2, only_titles=None):
     """
     Re-checks prices for this list of cards by title, not one card at a
     time: groups the cards by title prefix (e.g. "OSK") and runs ONE
@@ -152,6 +169,11 @@ def run_price_update(db: Session, cards, delay: float = 1.2):
     honest cost of also re-checking prices for cards in those titles you
     don't own (harmless, just slightly more work than the bare minimum).
     Reports which of YOUR specific cards had a sell/buy price change.
+
+    only_titles: if given, restricts to exactly these titles instead of
+    auto-computing (and capping at MAX_PRICE_UPDATE_TITLES) the full set
+    — used by the frontend to process one title per request for a real,
+    incremental progress counter instead of one long blocking call.
     """
     unique = []
     seen = set()
@@ -174,14 +196,17 @@ def run_price_update(db: Session, cards, delay: float = 1.2):
 
     before_by_card = {c.id: latest_prices(c.id) for c in unique}
 
-    titles = []
-    for c in unique:
-        t = _title_prefix(c.card_number)
-        if t and t not in titles:
-            titles.append(t)
-
-    truncated = len(titles) > MAX_PRICE_UPDATE_TITLES
-    titles = titles[:MAX_PRICE_UPDATE_TITLES]
+    if only_titles is not None:
+        titles = list(only_titles)
+        truncated = False
+    else:
+        titles = []
+        for c in unique:
+            t = _title_prefix(c.card_number)
+            if t and t not in titles:
+                titles.append(t)
+        truncated = len(titles) > MAX_PRICE_UPDATE_TITLES
+        titles = titles[:MAX_PRICE_UPDATE_TITLES]
     titles_set = set(titles)
 
     total_snapshots = 0

@@ -108,7 +108,7 @@ def price_check_collection(collection_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{collection_id}/price-update", response_model=schemas.PriceUpdateResult)
-def price_update_collection(collection_id: int, db: Session = Depends(get_db)):
+def price_update_collection(collection_id: int, body: schemas.PriceUpdateRequest = schemas.PriceUpdateRequest(), db: Session = Depends(get_db)):
     """Re-checks EVERY card in this collection regardless of whether it
     already has a price, and reports which ones' sell/buy price changed."""
     if not db.query(models.Collection).get(collection_id):
@@ -116,7 +116,7 @@ def price_update_collection(collection_id: int, db: Session = Depends(get_db)):
     copies = db.query(models.Copy).filter(models.Copy.collection_id == collection_id).all()
     cards = [c.card for c in copies]
     try:
-        result = scrape_bridge.run_price_update(db, cards)
+        result = scrape_bridge.run_price_update(db, cards, only_titles=body.only_titles)
     except Exception as e:
         raise HTTPException(502, f"Price update failed: {e}")
     return schemas.PriceUpdateResult(**result)

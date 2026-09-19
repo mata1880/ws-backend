@@ -77,6 +77,10 @@ class PriceChangeItem(BaseModel):
     new_buy_price_jpy: Optional[int] = None
 
 
+class PriceUpdateRequest(BaseModel):
+    only_titles: Optional[List[str]] = None  # process exactly these titles (for incremental per-title progress); omit for the default auto-grouped/capped behavior
+
+
 class PriceUpdateResult(BaseModel):
     checked: int
     changed: List[PriceChangeItem]

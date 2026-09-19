@@ -353,7 +353,7 @@ def price_check_binder(binder_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{binder_id}/price-update", response_model=schemas.PriceUpdateResult)
-def price_update_binder(binder_id: int, db: Session = Depends(get_db)):
+def price_update_binder(binder_id: int, body: schemas.PriceUpdateRequest = schemas.PriceUpdateRequest(), db: Session = Depends(get_db)):
     """Re-checks EVERY card currently placed in this binder regardless of
     whether it already has a price, and reports which ones' sell/buy price changed."""
     if not db.query(models.Binder).get(binder_id):
@@ -361,7 +361,7 @@ def price_update_binder(binder_id: int, db: Session = Depends(get_db)):
     slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).all()
     cards = [s.card for s in slots]
     try:
-        result = scrape_bridge.run_price_update(db, cards)
+        result = scrape_bridge.run_price_update(db, cards, only_titles=body.only_titles)
     except Exception as e:
         raise HTTPException(502, f"Price update failed: {e}")
     return schemas.PriceUpdateResult(**result)
