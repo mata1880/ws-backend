@@ -88,6 +88,16 @@ def _base_card_number(cn: str) -> str:
 
 
 MAX_PRICE_CHECK_CARDS = 50  # a single request with no progress bar and no partial-recovery if interrupted — kept well short of the 100-min platform timeout on purpose
+MAX_PRICE_UPDATE_TITLES = 10  # title-level scrapes cover many cards each, so this can stay small
+
+
+def _title_prefix(card_number: str):
+    # Mirrors the frontend's W.titlePrefix(): the leading 2-4 letters
+    # before the first "/" — e.g. "OSK" from "OSK/S133-001SSP". Matches
+    # what --card-code / the Browse title filter already treat as one title.
+    before = (card_number or "").split("/")[0]
+    m = re.match(r"^[A-Za-z]{2,4}", before)
+    return m.group(0).upper() if m else (before or None)
 
 
 def run_price_check(db: Session, cards, delay: float = 1.2):
@@ -133,11 +143,15 @@ def run_price_check(db: Session, cards, delay: float = 1.2):
 
 def run_price_update(db: Session, cards, delay: float = 1.2):
     """
-    Re-checks EVERY card in this list regardless of whether it already
-    has a price — nothing gets skipped — and reports which ones' sell or
-    buy price actually changed. Slower than run_price_check since it
-    never skips anything already priced; this is the one for "give me
-    fresh numbers on what I already own", not just catching up new cards.
+    Re-checks prices for this list of cards by title, not one card at a
+    time: groups the cards by title prefix (e.g. "OSK") and runs ONE
+    broad scrape per distinct title, the same kind of scrape Browse's
+    "Get card info" already does. A 100-150 card collection is usually
+    only a handful of titles, so this turns what used to be 100+
+    individual searches into maybe 3-6 — dramatically faster, at the
+    honest cost of also re-checking prices for cards in those titles you
+    don't own (harmless, just slightly more work than the bare minimum).
+    Reports which of YOUR specific cards had a sell/buy price change.
     """
     unique = []
     seen = set()
@@ -146,8 +160,8 @@ def run_price_update(db: Session, cards, delay: float = 1.2):
             seen.add(c.card_number)
             unique.append(c)
 
-    truncated = len(unique) > MAX_PRICE_CHECK_CARDS
-    unique = unique[:MAX_PRICE_CHECK_CARDS]
+    if not unique:
+        return {"checked": 0, "changed": [], "total_price_snapshots_added": 0, "truncated": False}
 
     def latest_prices(card_id):
         snap = (
@@ -158,14 +172,31 @@ def run_price_update(db: Session, cards, delay: float = 1.2):
         )
         return (snap.sell_price_jpy, snap.buy_price_jpy) if snap else (None, None)
 
-    changed = []
-    total_snapshots = 0
-    for c in unique:
-        before_sell, before_buy = latest_prices(c.id)
-        r = run_price_scrape(db, "ws", c.card_number, "both", delay)
-        total_snapshots += r["price_snapshots_added"]
-        after_sell, after_buy = latest_prices(c.id)
+    before_by_card = {c.id: latest_prices(c.id) for c in unique}
 
+    titles = []
+    for c in unique:
+        t = _title_prefix(c.card_number)
+        if t and t not in titles:
+            titles.append(t)
+
+    truncated = len(titles) > MAX_PRICE_UPDATE_TITLES
+    titles = titles[:MAX_PRICE_UPDATE_TITLES]
+    titles_set = set(titles)
+
+    total_snapshots = 0
+    for title in titles:
+        r = run_price_scrape(db, "ws", title, "both", delay)
+        total_snapshots += r["price_snapshots_added"]
+
+    changed = []
+    checked = 0
+    for c in unique:
+        if _title_prefix(c.card_number) not in titles_set:
+            continue  # this card's title wasn't covered this round (truncated) — try again next click
+        checked += 1
+        before_sell, before_buy = before_by_card[c.id]
+        after_sell, after_buy = latest_prices(c.id)
         if after_sell != before_sell or after_buy != before_buy:
             changed.append({
                 "card_number": c.card_number,
@@ -177,7 +208,7 @@ def run_price_update(db: Session, cards, delay: float = 1.2):
             })
 
     return {
-        "checked": len(unique),
+        "checked": checked,
         "changed": changed,
         "total_price_snapshots_added": total_snapshots,
         "truncated": truncated,

@@ -227,14 +227,26 @@ def _parse_card_product_tiles(soup: BeautifulSoup, game: str, set_code: str, lis
 
         name = None
         rarity = current_rarity
+        alt_rarity = None
         if card_number and alt_text.startswith(card_number):
             rest = alt_text[len(card_number):].strip()
             parts = rest.split(" ", 1)
             if len(parts) == 2 and len(parts[0]) <= 8:
-                rarity = parts[0]
+                alt_rarity = parts[0]
                 name = parts[1]
             elif rest:
                 name = rest
+        # Prefer the page's own per-card rarity token — EXCEPT when the
+        # section heading is a more specific superset of it (e.g. heading
+        # "SR1" vs a generic "SR" in the per-card alt text). yuyu-tei's
+        # per-card label sometimes doesn't distinguish numbered
+        # sub-variants like SR1/SR2/SR3 that the page's own grouping
+        # headings do track separately — without this, that distinction
+        # silently collapses to plain "SR".
+        if current_rarity and alt_rarity and current_rarity != alt_rarity and current_rarity.startswith(alt_rarity):
+            rarity = current_rarity
+        elif alt_rarity:
+            rarity = alt_rarity
         if not name:
             candidates = [l for l in lines if "円" not in l and l != card_number]
             name = max(candidates, key=len) if candidates else (card_number or "")
@@ -363,7 +375,11 @@ def _parse_listing_page_generic(soup: BeautifulSoup, game: str, set_code: str, l
             candidates = [l for l in lines if "円" not in l and l != card_number]
             name = max(candidates, key=len) if candidates else (card_number or "")
 
-        rarity = rarity_from_text or current_rarity
+        rarity = rarity_from_text
+        if current_rarity and rarity_from_text and current_rarity != rarity_from_text and current_rarity.startswith(rarity_from_text):
+            rarity = current_rarity
+        elif not rarity_from_text:
+            rarity = current_rarity
 
         prices = [int(x.replace(",", "")) for x in YEN_RE.findall(block_text)]
 
