@@ -67,6 +67,7 @@ def run_price_scrape(db: Session, game: str, card_code: str, mode: str, delay: f
             cards_by_number[rec.cardNumber] = new_card
     db.flush()  # assigns .id to every new card in one batch, not one per record
 
+    new_snapshots = []
     for rec in records:
         card = cards_by_number[rec.cardNumber]
         # keep name/rarity/image current — cheap, and yuyu-tei sometimes has
@@ -82,16 +83,24 @@ def run_price_scrape(db: Session, game: str, card_code: str, mode: str, delay: f
         if skip_bulk_rarities and (rec.rarity or "").strip().upper() in BULK_RARITIES_SKIP_PRICE:
             continue
 
-        snap = models.PriceSnapshot(
+        new_snapshots.append(models.PriceSnapshot(
             card_id=card.id,
             sell_price_jpy=rec.sellPriceJpy,
             buy_price_jpy=rec.buyPriceJpy,
             buy_price_boosted=bool(rec.buyPriceBoosted),
             stock=rec.stock,
             availability=rec.availability,
-        )
-        db.add(snap)
+        ))
         snapshots_added += 1
+
+    # A real batch insert (one round-trip for all of them), not `db.add()`
+    # in a loop — every scrape creates a fresh snapshot per card by design,
+    # so for a big title this is hundreds of rows every single time, and
+    # `db.add()` one at a time was still issuing one INSERT round-trip per
+    # row even inside a single commit. This was the other half of the
+    # slowdown the batched card-lookup fix didn't cover.
+    if new_snapshots:
+        db.bulk_save_objects(new_snapshots)
 
     db.commit()
     return {"cards_seen": cards_seen, "price_snapshots_added": snapshots_added, "sets": sets_touched}
