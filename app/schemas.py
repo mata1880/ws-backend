@@ -251,3 +251,9 @@ class AssignSlotRequest(BaseModel):
 class MoveSlotRequest(BaseModel):
     from_index: int
     to_index: int
+
+
+class CollectionCopyCount(BaseModel):
+    collection_id: int
+    name: str
+    count: int

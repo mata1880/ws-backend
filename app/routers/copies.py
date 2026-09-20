@@ -55,6 +55,27 @@ def copies_for_card(card_id: int, db: Session = Depends(get_db)):
     return db.query(models.Copy).filter(models.Copy.card_id == card_id).order_by(models.Copy.copy_number).all()
 
 
+@router.get("/counts-for-card/{card_id}", response_model=List[schemas.CollectionCopyCount])
+def counts_for_card(card_id: int, db: Session = Depends(get_db)):
+    """
+    How many copies of this one card sit in EACH collection — every
+    collection listed, zero-filled where there are none. Powers the
+    inline -/+ stepper directly on each row of the "add to collection"
+    picker, so adjusting quantity doesn't need a second popup.
+    """
+    collections = db.query(models.Collection).order_by(models.Collection.sort_order, models.Collection.name).all()
+    counts = dict(
+        db.query(models.Copy.collection_id, func.count(models.Copy.id))
+        .filter(models.Copy.card_id == card_id, models.Copy.collection_id.isnot(None))
+        .group_by(models.Copy.collection_id)
+        .all()
+    )
+    return [
+        schemas.CollectionCopyCount(collection_id=c.id, name=c.name, count=counts.get(c.id, 0))
+        for c in collections
+    ]
+
+
 @router.patch("/{copy_id}", response_model=schemas.CopyOut)
 def update_copy(copy_id: int, body: schemas.CopyUpdate, db: Session = Depends(get_db)):
     """
