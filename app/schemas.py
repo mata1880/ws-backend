@@ -239,3 +239,8 @@ class CopyWithCard(CopyOut):
 class AssignSlotRequest(BaseModel):
     copy_id: Optional[int] = None  # link an owned copy to this slot
     card_id: Optional[int] = None  # or: place a "planned" slot for a card you don't own yet (no copy_id)
+
+
+class MoveSlotRequest(BaseModel):
+    from_index: int
+    to_index: int

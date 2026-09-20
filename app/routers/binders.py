@@ -199,6 +199,67 @@ def unassign_slot(binder_id: int, slot_index: int, db: Session = Depends(get_db)
     db.commit()
 
 
+@router.post("/{binder_id}/slots/move", response_model=List[schemas.BinderSlotOut])
+def move_slot(binder_id: int, body: schemas.MoveSlotRequest, db: Session = Depends(get_db)):
+    """
+    Moves (or swaps, if the destination is occupied) a card between two
+    slots in ONE request. The frontend used to do this as up to 4
+    sequential DELETE/POST round-trips plus a full reload for a single
+    move — this is the same two BinderSlot rows, just their slot_index
+    updated in place, which is both fewer requests and a cheaper
+    operation than deleting and recreating rows.
+    """
+    if not db.query(models.Binder).get(binder_id):
+        raise HTTPException(404, "Binder not found")
+
+    from_slot = (
+        db.query(models.BinderSlot)
+        .filter(models.BinderSlot.binder_id == binder_id, models.BinderSlot.slot_index == body.from_index)
+        .first()
+    )
+    if not from_slot:
+        raise HTTPException(404, "Source slot is empty")
+
+    to_slot = (
+        db.query(models.BinderSlot)
+        .filter(models.BinderSlot.binder_id == binder_id, models.BinderSlot.slot_index == body.to_index)
+        .first()
+    )
+
+    if to_slot is None:
+        from_slot.slot_index = body.to_index
+        db.commit()
+        db.refresh(from_slot)
+        wishlist_by_card = {
+            wi.card_id: wi.wishlist_id
+            for wi in db.query(models.WishlistItem).filter(models.WishlistItem.card_id == from_slot.card_id).all()
+        }
+        return [_slot_out(from_slot, wishlist_by_card=wishlist_by_card)]
+
+    # Swap: park one slot at a temporary index first, since (binder_id,
+    # slot_index) is unique and updating both to each other's index in
+    # the wrong order would collide mid-transaction.
+    TEMP_INDEX = -1
+    from_slot.slot_index = TEMP_INDEX
+    db.flush()
+    to_slot.slot_index = body.from_index
+    db.flush()
+    from_slot.slot_index = body.to_index
+    db.commit()
+    db.refresh(from_slot)
+    db.refresh(to_slot)
+    wishlist_by_card = {
+        wi.card_id: wi.wishlist_id
+        for wi in db.query(models.WishlistItem)
+        .filter(models.WishlistItem.card_id.in_([from_slot.card_id, to_slot.card_id]))
+        .all()
+    }
+    return [
+        _slot_out(from_slot, wishlist_by_card=wishlist_by_card),
+        _slot_out(to_slot, wishlist_by_card=wishlist_by_card),
+    ]
+
+
 @router.get("/{binder_id}/available-copies", response_model=List[schemas.CopyOut])
 def available_copies(binder_id: int, card_id: int, db: Session = Depends(get_db)):
     """
