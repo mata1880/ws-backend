@@ -70,6 +70,20 @@ def list_collection_copies(collection_id: int, db: Session = Depends(get_db)):
     ]
 
 
+@router.get("/{collection_id}/copies-of-card/{card_id}", response_model=List[schemas.CopyOut])
+def copies_of_card_in_collection(collection_id: int, card_id: int, db: Session = Depends(get_db)):
+    """Every copy of this one card that's filed into this collection —
+    powers the quantity stepper (- X +) on the add-to-collection picker."""
+    if not db.query(models.Collection).get(collection_id):
+        raise HTTPException(404, "Collection not found")
+    return (
+        db.query(models.Copy)
+        .filter(models.Copy.collection_id == collection_id, models.Copy.card_id == card_id)
+        .order_by(models.Copy.copy_number)
+        .all()
+    )
+
+
 @router.get("/{collection_id}/value", response_model=schemas.CollectionValueOut)
 def collection_value(collection_id: int, db: Session = Depends(get_db)):
     c = db.query(models.Collection).get(collection_id)
