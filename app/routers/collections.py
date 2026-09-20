@@ -2,6 +2,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from .. import models, schemas, utils, scrape_bridge
 from ..database import get_db
@@ -11,14 +12,22 @@ router = APIRouter(prefix="/collections", tags=["collections"])
 
 @router.get("", response_model=List[schemas.CollectionOut])
 def list_collections(db: Session = Depends(get_db)):
-    return db.query(models.Collection).order_by(models.Collection.name).all()
+    return db.query(models.Collection).order_by(models.Collection.sort_order, models.Collection.name).all()
+
+
+@router.put("/reorder", status_code=204)
+def reorder_collections(body: schemas.ReorderRequest, db: Session = Depends(get_db)):
+    for i, cid in enumerate(body.ids):
+        db.query(models.Collection).filter(models.Collection.id == cid).update({"sort_order": i})
+    db.commit()
 
 
 @router.post("", response_model=schemas.CollectionOut, status_code=201)
 def create_collection(body: schemas.CollectionCreate, db: Session = Depends(get_db)):
     if db.query(models.Collection).filter(models.Collection.name == body.name).first():
         raise HTTPException(409, "A collection with that name already exists")
-    c = models.Collection(name=body.name)
+    max_order = db.query(func.max(models.Collection.sort_order)).scalar() or 0
+    c = models.Collection(name=body.name, sort_order=max_order + 1)
     db.add(c)
     db.commit()
     db.refresh(c)
@@ -54,8 +63,9 @@ def list_collection_copies(collection_id: int, db: Session = Depends(get_db)):
     if not db.query(models.Collection).get(collection_id):
         raise HTTPException(404, "Collection not found")
     copies = db.query(models.Copy).filter(models.Copy.collection_id == collection_id).all()
+    cards_by_id = utils.cards_with_price_batch(db, [c.card for c in copies])
     return [
-        schemas.CopyWithCard(**schemas.CopyOut.model_validate(c).model_dump(), card=utils.card_with_price(db, c.card))
+        schemas.CopyWithCard(**schemas.CopyOut.model_validate(c).model_dump(), card=cards_by_id[c.card_id])
         for c in copies
     ]
 

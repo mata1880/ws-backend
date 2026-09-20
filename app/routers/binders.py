@@ -2,6 +2,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from .. import models, schemas, scrape_bridge
 from ..database import get_db
@@ -57,7 +58,14 @@ def _slot_out(slot: models.BinderSlot, wishlist_by_card: dict = None, db: Sessio
 
 @router.get("", response_model=List[schemas.BinderOut])
 def list_binders(db: Session = Depends(get_db)):
-    return db.query(models.Binder).order_by(models.Binder.name).all()
+    return db.query(models.Binder).order_by(models.Binder.sort_order, models.Binder.name).all()
+
+
+@router.put("/reorder", status_code=204)
+def reorder_binders(body: schemas.ReorderRequest, db: Session = Depends(get_db)):
+    for i, bid in enumerate(body.ids):
+        db.query(models.Binder).filter(models.Binder.id == bid).update({"sort_order": i})
+    db.commit()
 
 
 @router.post("", response_model=schemas.BinderOut, status_code=201)
@@ -65,7 +73,8 @@ def create_binder(body: schemas.BinderCreate, db: Session = Depends(get_db)):
     _validate_layout(body.layout)
     if db.query(models.Binder).filter(models.Binder.name == body.name).first():
         raise HTTPException(409, "A binder with that name already exists")
-    b = models.Binder(name=body.name, layout=body.layout)
+    max_order = db.query(func.max(models.Binder.sort_order)).scalar() or 0
+    b = models.Binder(name=body.name, layout=body.layout, sort_order=max_order + 1)
     db.add(b)
     db.commit()
     db.refresh(b)

@@ -7,6 +7,7 @@ the new placeholder-slot system doesn't wipe out binders you'd already
 arranged.
 """
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from . import models
 
@@ -46,3 +47,38 @@ def migrate_legacy_binder_placements(db: Session):
     if migrated:
         db.commit()
         print(f"[migration] Converted {migrated} legacy binder placement(s) to BinderSlot rows.")
+
+
+def add_sort_order_columns(db: Session):
+    """
+    Adds a sort_order column to collections/wishlists/binders if it
+    doesn't already exist yet, for the sidebar's manual reorder feature.
+    create_all() only creates missing TABLES, not missing COLUMNS on
+    tables that already exist, hence this explicit step. Safe to run
+    every startup: the ALTER TABLE just fails harmlessly (caught and
+    ignored) once the column is already there.
+    """
+    tables_and_models = [
+        ("collections", models.Collection),
+        ("wishlists", models.Wishlist),
+        ("binders", models.Binder),
+    ]
+    for table, model in tables_and_models:
+        try:
+            db.execute(text(f"ALTER TABLE {table} ADD COLUMN sort_order INTEGER DEFAULT 0"))
+            db.commit()
+        except Exception:
+            db.rollback()  # column already exists — nothing to do
+
+        # Backfill a stable initial order, but only if this table has
+        # never been manually reordered yet (every row still shares the
+        # same default value) — otherwise a restart would silently wipe
+        # out someone's custom ordering.
+        total = db.query(model).count()
+        distinct_values = db.query(model.sort_order).distinct().count()
+        if total > 1 and distinct_values <= 1:
+            rows = db.query(model).order_by(model.id).all()
+            for i, row in enumerate(rows):
+                row.sort_order = i
+            db.commit()
+

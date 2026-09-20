@@ -97,6 +97,7 @@ class Collection(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False, unique=True)
     created_at = Column(DateTime, default=now_utc)
+    sort_order = Column(Integer, nullable=False, default=0)  # for manual sidebar reordering
 
     copies = relationship("Copy", back_populates="collection")
 
@@ -107,6 +108,7 @@ class Wishlist(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False, unique=True)
     created_at = Column(DateTime, default=now_utc)
+    sort_order = Column(Integer, nullable=False, default=0)  # for manual sidebar reordering
 
     items = relationship("WishlistItem", back_populates="wishlist", cascade="all, delete-orphan")
 
@@ -140,6 +142,7 @@ class Binder(Base):
     name = Column(String, nullable=False, unique=True)
     layout = Column(String, nullable=False, default="3x3")  # one of VALID_LAYOUTS
     priority = Column(Integer, nullable=False, default=0)   # lower = higher priority for auto-placement
+    sort_order = Column(Integer, nullable=False, default=0)  # for manual sidebar reordering
     created_at = Column(DateTime, default=now_utc)
 
     copies = relationship("Copy", back_populates="binder")

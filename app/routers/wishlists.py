@@ -2,6 +2,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from .. import models, schemas, utils, scrape_bridge
 from ..database import get_db
@@ -11,14 +12,22 @@ router = APIRouter(prefix="/wishlists", tags=["wishlists"])
 
 @router.get("", response_model=List[schemas.WishlistOut])
 def list_wishlists(db: Session = Depends(get_db)):
-    return db.query(models.Wishlist).order_by(models.Wishlist.name).all()
+    return db.query(models.Wishlist).order_by(models.Wishlist.sort_order, models.Wishlist.name).all()
+
+
+@router.put("/reorder", status_code=204)
+def reorder_wishlists(body: schemas.ReorderRequest, db: Session = Depends(get_db)):
+    for i, wid in enumerate(body.ids):
+        db.query(models.Wishlist).filter(models.Wishlist.id == wid).update({"sort_order": i})
+    db.commit()
 
 
 @router.post("", response_model=schemas.WishlistOut, status_code=201)
 def create_wishlist(body: schemas.WishlistCreate, db: Session = Depends(get_db)):
     if db.query(models.Wishlist).filter(models.Wishlist.name == body.name).first():
         raise HTTPException(409, "A wishlist with that name already exists")
-    w = models.Wishlist(name=body.name)
+    max_order = db.query(func.max(models.Wishlist.sort_order)).scalar() or 0
+    w = models.Wishlist(name=body.name, sort_order=max_order + 1)
     db.add(w)
     db.commit()
     db.refresh(w)
@@ -50,7 +59,8 @@ def list_wishlist_items(wishlist_id: int, db: Session = Depends(get_db)):
     if not db.query(models.Wishlist).get(wishlist_id):
         raise HTTPException(404, "Wishlist not found")
     items = db.query(models.WishlistItem).filter(models.WishlistItem.wishlist_id == wishlist_id).all()
-    return [utils.card_with_price(db, i.card) for i in items]
+    cards_by_id = utils.cards_with_price_batch(db, [i.card for i in items])
+    return [cards_by_id[i.card_id] for i in items]
 
 
 @router.post("/{wishlist_id}/items", status_code=201)

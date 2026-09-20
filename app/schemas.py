@@ -104,6 +104,7 @@ class CollectionOut(BaseModel):
     id: int
     name: str
     created_at: datetime
+    sort_order: int = 0
 
 
 class CollectionValueOut(BaseModel):
@@ -141,6 +142,7 @@ class WishlistOut(BaseModel):
     id: int
     name: str
     created_at: datetime
+    sort_order: int = 0
 
 
 class WishlistItemAdd(BaseModel):
@@ -163,6 +165,11 @@ class BinderOut(BaseModel):
     name: str
     layout: str
     created_at: datetime
+    sort_order: int = 0
+
+
+class ReorderRequest(BaseModel):
+    ids: List[int]  # the FULL list of IDs for this type, in the desired display order
 
 
 class BinderPageLabelOut(BaseModel):
