@@ -6,7 +6,7 @@ from sqlalchemy import func
 
 from .. import models, schemas, scrape_bridge
 from ..database import get_db
-from .auth import get_current_profile_or_default
+from .auth import get_current_profile
 
 router = APIRouter(prefix="/binders", tags=["binders"])
 
@@ -67,7 +67,7 @@ def _slot_out(slot: models.BinderSlot, wishlist_by_card: dict = None, db: Sessio
 
 
 @router.get("", response_model=List[schemas.BinderOut])
-def list_binders(db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def list_binders(db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     return (
         db.query(models.Binder)
         .filter(models.Binder.profile_id == profile.id)
@@ -77,7 +77,7 @@ def list_binders(db: Session = Depends(get_db), profile: models.Profile = Depend
 
 
 @router.put("/reorder", status_code=204)
-def reorder_binders(body: schemas.ReorderRequest, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def reorder_binders(body: schemas.ReorderRequest, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     for i, bid in enumerate(body.ids):
         db.query(models.Binder).filter(
             models.Binder.id == bid, models.Binder.profile_id == profile.id
@@ -86,7 +86,7 @@ def reorder_binders(body: schemas.ReorderRequest, db: Session = Depends(get_db),
 
 
 @router.post("", response_model=schemas.BinderOut, status_code=201)
-def create_binder(body: schemas.BinderCreate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def create_binder(body: schemas.BinderCreate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     _validate_layout(body.layout)
     if db.query(models.Binder).filter(
         models.Binder.name == body.name, models.Binder.profile_id == profile.id
@@ -103,7 +103,7 @@ def create_binder(body: schemas.BinderCreate, db: Session = Depends(get_db), pro
 
 
 @router.patch("/{binder_id}", response_model=schemas.BinderOut)
-def update_binder(binder_id: int, body: schemas.BinderUpdate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def update_binder(binder_id: int, body: schemas.BinderUpdate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     b = _owned_binder(db, binder_id, profile)
     if body.layout is not None:
         _validate_layout(body.layout)
@@ -116,7 +116,7 @@ def update_binder(binder_id: int, body: schemas.BinderUpdate, db: Session = Depe
 
 
 @router.delete("/{binder_id}", status_code=204)
-def delete_binder(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def delete_binder(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     b = _owned_binder(db, binder_id, profile)
     db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).delete()
     db.query(models.BinderPageLabel).filter(models.BinderPageLabel.binder_id == binder_id).delete()
@@ -125,7 +125,7 @@ def delete_binder(binder_id: int, db: Session = Depends(get_db), profile: models
 
 
 @router.get("/{binder_id}/slots", response_model=List[schemas.BinderSlotOut])
-def get_slots(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def get_slots(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """
     Returns only OCCUPIED (or planned) slots — the frontend knows the
     binder's layout and therefore the page size, and renders empty slots
@@ -144,7 +144,7 @@ def get_slots(binder_id: int, db: Session = Depends(get_db), profile: models.Pro
 
 
 @router.post("/{binder_id}/slots/move", response_model=List[schemas.BinderSlotOut])
-def move_slot(binder_id: int, body: schemas.MoveSlotRequest, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def move_slot(binder_id: int, body: schemas.MoveSlotRequest, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """
     Moves (or swaps, if the destination is occupied) a card between two
     slots in ONE request. The frontend used to do this as up to 4
@@ -209,7 +209,7 @@ def move_slot(binder_id: int, body: schemas.MoveSlotRequest, db: Session = Depen
 
 
 @router.post("/{binder_id}/slots/{slot_index}", response_model=schemas.BinderSlotOut)
-def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """
     Two ways to fill a slot:
     - copy_id given: link an owned copy (must physically fit this binder's layout).
@@ -276,7 +276,7 @@ def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest
 
 
 @router.delete("/{binder_id}/slots/{slot_index}", status_code=204)
-def unassign_slot(binder_id: int, slot_index: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def unassign_slot(binder_id: int, slot_index: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     _owned_binder(db, binder_id, profile)
     slot = (
         db.query(models.BinderSlot)
@@ -290,7 +290,7 @@ def unassign_slot(binder_id: int, slot_index: int, db: Session = Depends(get_db)
 
 
 @router.get("/{binder_id}/available-copies", response_model=List[schemas.CopyOut])
-def available_copies(binder_id: int, card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def available_copies(binder_id: int, card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """
     For the '+' button on a binder slot, or the send-to-binder flow:
     which of YOUR copies of this card are currently unplaced (not linked
@@ -311,7 +311,7 @@ def available_copies(binder_id: int, card_id: int, db: Session = Depends(get_db)
 
 
 @router.get("/{binder_id}/planned-slot", response_model=schemas.BinderSlotOut)
-def find_planned_slot(binder_id: int, card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def find_planned_slot(binder_id: int, card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """Is there already an unfilled (planned) slot for this card in this
     binder? Used by the send-to-binder flow to fill an existing
     placeholder instead of creating a duplicate one. 404 if none."""
@@ -331,7 +331,7 @@ def find_planned_slot(binder_id: int, card_id: int, db: Session = Depends(get_db
 
 
 @router.get("/{binder_id}/page-labels", response_model=List[schemas.BinderPageLabelOut])
-def list_page_labels(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def list_page_labels(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """Every page in this binder that's been given a custom name."""
     _owned_binder(db, binder_id, profile)
     labels = db.query(models.BinderPageLabel).filter(models.BinderPageLabel.binder_id == binder_id).all()
@@ -339,7 +339,7 @@ def list_page_labels(binder_id: int, db: Session = Depends(get_db), profile: mod
 
 
 @router.put("/{binder_id}/pages/{page_number}/label", response_model=schemas.BinderPageLabelOut)
-def set_page_label(binder_id: int, page_number: int, body: schemas.BinderPageLabelSet, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def set_page_label(binder_id: int, page_number: int, body: schemas.BinderPageLabelSet, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """Sets (or clears, if name is empty) a page's custom name."""
     _owned_binder(db, binder_id, profile)
     if page_number < 1:
@@ -367,7 +367,7 @@ def set_page_label(binder_id: int, page_number: int, body: schemas.BinderPageLab
 
 
 @router.get("/{binder_id}/value", response_model=schemas.BinderValueOut)
-def binder_value(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def binder_value(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """
     Sums current sell/buy value for this binder's slots, split into what
     you actually own right now (a real copy linked AND filed into a
@@ -416,7 +416,7 @@ def binder_value(binder_id: int, db: Session = Depends(get_db), profile: models.
 
 
 @router.get("/{binder_id}/fillable", response_model=List[schemas.FillableSlotOut])
-def fillable_slots(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def fillable_slots(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """
     Which of this binder's planned (greyed, no-copy) slots currently have
     an owned, collection-filed copy available to fill them? Drives the
@@ -465,7 +465,7 @@ def fillable_slots(binder_id: int, db: Session = Depends(get_db), profile: model
 
 
 @router.post("/{binder_id}/fill-all", response_model=schemas.FillAllResult)
-def fill_all(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def fill_all(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """Fills every currently-fillable planned slot in this binder in one go."""
     _owned_binder(db, binder_id, profile)
 
@@ -507,7 +507,7 @@ def fill_all(binder_id: int, db: Session = Depends(get_db), profile: models.Prof
 
 
 @router.post("/{binder_id}/price-check", response_model=schemas.PriceCheckResult)
-def price_check_binder(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def price_check_binder(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """Fetches a price only for cards currently placed in this binder that
     don't have one yet — fast, catches up new additions without re-checking the rest."""
     _owned_binder(db, binder_id, profile)
@@ -521,7 +521,7 @@ def price_check_binder(binder_id: int, db: Session = Depends(get_db), profile: m
 
 
 @router.post("/{binder_id}/price-update", response_model=schemas.PriceUpdateResult)
-def price_update_binder(binder_id: int, body: schemas.PriceUpdateRequest = schemas.PriceUpdateRequest(), db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def price_update_binder(binder_id: int, body: schemas.PriceUpdateRequest = schemas.PriceUpdateRequest(), db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """Re-checks EVERY card currently placed in this binder regardless of
     whether it already has a price, and reports which ones' sell/buy price changed."""
     _owned_binder(db, binder_id, profile)

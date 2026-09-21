@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_db
-from .auth import get_current_profile_or_default
+from .auth import get_current_profile
 from .binders import FRAME_COMPATIBILITY, _resolved_layout
 
 router = APIRouter(prefix="/copies", tags=["copies"])
@@ -34,7 +34,7 @@ def _owned_collection_id(db: Session, collection_id: int, profile: models.Profil
 
 
 @router.post("", response_model=schemas.CopyOut, status_code=201)
-def create_copy(body: schemas.CopyCreate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def create_copy(body: schemas.CopyCreate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """The '+' button on Browse/Collection: adds a brand new physical copy.
     frame_type defaults from the card's rarity (sleeve for bulk-common
     rarities, toploader otherwise) unless explicitly given."""
@@ -72,7 +72,7 @@ def create_copy(body: schemas.CopyCreate, db: Session = Depends(get_db), profile
 
 
 @router.get("/by-card/{card_id}", response_model=List[schemas.CopyOut])
-def copies_for_card(card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def copies_for_card(card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """All of YOUR copies of one card, across every collection — used to
     build the stacked-tile copy dropdown (grade/note editing, 'which
     copy' pickers)."""
@@ -85,7 +85,7 @@ def copies_for_card(card_id: int, db: Session = Depends(get_db), profile: models
 
 
 @router.get("/counts-for-card/{card_id}", response_model=List[schemas.CollectionCopyCount])
-def counts_for_card(card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def counts_for_card(card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """
     How many copies of this one card sit in EACH of YOUR collections —
     every one of your collections listed, zero-filled where there are
@@ -116,7 +116,7 @@ def counts_for_card(card_id: int, db: Session = Depends(get_db), profile: models
 
 
 @router.patch("/{copy_id}", response_model=schemas.CopyOut)
-def update_copy(copy_id: int, body: schemas.CopyUpdate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def update_copy(copy_id: int, body: schemas.CopyUpdate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """
     Covers both the settings-gear edits (grade/frame/note/purchase price)
     and moving a copy between collections. Use clear_collection=true to
@@ -160,7 +160,7 @@ def update_copy(copy_id: int, body: schemas.CopyUpdate, db: Session = Depends(ge
 
 
 @router.delete("/{copy_id}", status_code=204)
-def delete_copy(copy_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def delete_copy(copy_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """
     Removes a copy entirely (e.g. sold). If it was linked to a binder
     slot, that slot is NOT deleted — it just reverts to "planned" (no

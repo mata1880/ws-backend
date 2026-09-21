@@ -6,7 +6,7 @@ from sqlalchemy import func
 
 from .. import models, schemas, utils, scrape_bridge
 from ..database import get_db
-from .auth import get_current_profile_or_default
+from .auth import get_current_profile
 
 router = APIRouter(prefix="/wishlists", tags=["wishlists"])
 
@@ -21,7 +21,7 @@ def _owned_wishlist(db: Session, wishlist_id: int, profile: models.Profile) -> m
 
 
 @router.get("", response_model=List[schemas.WishlistOut])
-def list_wishlists(db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def list_wishlists(db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     return (
         db.query(models.Wishlist)
         .filter(models.Wishlist.profile_id == profile.id)
@@ -31,7 +31,7 @@ def list_wishlists(db: Session = Depends(get_db), profile: models.Profile = Depe
 
 
 @router.put("/reorder", status_code=204)
-def reorder_wishlists(body: schemas.ReorderRequest, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def reorder_wishlists(body: schemas.ReorderRequest, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     for i, wid in enumerate(body.ids):
         db.query(models.Wishlist).filter(
             models.Wishlist.id == wid, models.Wishlist.profile_id == profile.id
@@ -40,7 +40,7 @@ def reorder_wishlists(body: schemas.ReorderRequest, db: Session = Depends(get_db
 
 
 @router.post("", response_model=schemas.WishlistOut, status_code=201)
-def create_wishlist(body: schemas.WishlistCreate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def create_wishlist(body: schemas.WishlistCreate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     if db.query(models.Wishlist).filter(
         models.Wishlist.name == body.name, models.Wishlist.profile_id == profile.id
     ).first():
@@ -56,7 +56,7 @@ def create_wishlist(body: schemas.WishlistCreate, db: Session = Depends(get_db),
 
 
 @router.patch("/{wishlist_id}", response_model=schemas.WishlistOut)
-def rename_wishlist(wishlist_id: int, body: schemas.WishlistRename, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def rename_wishlist(wishlist_id: int, body: schemas.WishlistRename, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     w = _owned_wishlist(db, wishlist_id, profile)
     w.name = body.name
     db.commit()
@@ -65,14 +65,14 @@ def rename_wishlist(wishlist_id: int, body: schemas.WishlistRename, db: Session 
 
 
 @router.delete("/{wishlist_id}", status_code=204)
-def delete_wishlist(wishlist_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def delete_wishlist(wishlist_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     w = _owned_wishlist(db, wishlist_id, profile)
     db.delete(w)
     db.commit()
 
 
 @router.get("/{wishlist_id}/items", response_model=List[schemas.CardWithPrice])
-def list_wishlist_items(wishlist_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def list_wishlist_items(wishlist_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     _owned_wishlist(db, wishlist_id, profile)
     items = db.query(models.WishlistItem).filter(models.WishlistItem.wishlist_id == wishlist_id).all()
     cards_by_id = utils.cards_with_price_batch(db, [i.card for i in items])
@@ -80,7 +80,7 @@ def list_wishlist_items(wishlist_id: int, db: Session = Depends(get_db), profile
 
 
 @router.post("/{wishlist_id}/items", status_code=201)
-def add_wishlist_item(wishlist_id: int, body: schemas.WishlistItemAdd, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def add_wishlist_item(wishlist_id: int, body: schemas.WishlistItemAdd, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     _owned_wishlist(db, wishlist_id, profile)
     if not db.query(models.Card).get(body.card_id):
         raise HTTPException(404, "Card not found")
@@ -109,7 +109,7 @@ def add_wishlist_item(wishlist_id: int, body: schemas.WishlistItemAdd, db: Sessi
 
 
 @router.delete("/{wishlist_id}/items/{card_id}", status_code=204)
-def remove_wishlist_item(wishlist_id: int, card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def remove_wishlist_item(wishlist_id: int, card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     _owned_wishlist(db, wishlist_id, profile)
     item = (
         db.query(models.WishlistItem)
@@ -123,7 +123,7 @@ def remove_wishlist_item(wishlist_id: int, card_id: int, db: Session = Depends(g
 
 
 @router.post("/{wishlist_id}/price-check", response_model=schemas.PriceCheckResult)
-def price_check_wishlist(wishlist_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def price_check_wishlist(wishlist_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """Fetches a price only for cards on this wishlist that don't have
     one yet — fast, catches up new additions without re-checking the rest."""
     _owned_wishlist(db, wishlist_id, profile)
@@ -137,7 +137,7 @@ def price_check_wishlist(wishlist_id: int, db: Session = Depends(get_db), profil
 
 
 @router.post("/{wishlist_id}/price-update", response_model=schemas.PriceUpdateResult)
-def price_update_wishlist(wishlist_id: int, body: schemas.PriceUpdateRequest = schemas.PriceUpdateRequest(), db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+def price_update_wishlist(wishlist_id: int, body: schemas.PriceUpdateRequest = schemas.PriceUpdateRequest(), db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """Re-checks EVERY card on this wishlist regardless of whether it
     already has a price, and reports which ones' sell/buy price changed."""
     _owned_wishlist(db, wishlist_id, profile)
