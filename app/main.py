@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import models, migrations
 from .database import engine, SessionLocal
-from .routers import cards, scrape, collections, wishlists, binders, copies
+from .routers import cards, scrape, collections, wishlists, binders, copies, auth
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -35,6 +35,7 @@ app.include_router(collections.router)
 app.include_router(wishlists.router)
 app.include_router(binders.router)
 app.include_router(copies.router)
+app.include_router(auth.router)
 
 
 @app.get("/")

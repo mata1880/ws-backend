@@ -53,6 +53,18 @@ class Profile(Base):
     created_at = Column(DateTime, default=now_utc)
 
 
+class Session(Base):
+    """A logged-in session. No expiration by design (agreed: stay logged
+    in until an explicit logout) — stored in the database rather than
+    in memory so it survives Render's free-tier cold starts."""
+    __tablename__ = "sessions"
+
+    id = Column(Integer, primary_key=True)
+    token = Column(String, nullable=False, unique=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=False)
+    created_at = Column(DateTime, default=now_utc)
+
+
 class Card(Base):
     __tablename__ = "cards"
 

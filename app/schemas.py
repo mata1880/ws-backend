@@ -257,3 +257,22 @@ class CollectionCopyCount(BaseModel):
     collection_id: int
     name: str
     count: int
+
+
+class LoginRequest(BaseModel):
+    username: str
+    pin: str
+
+
+class LoginResult(BaseModel):
+    token: str
+    profile_id: int
+    username: str
+    is_admin: bool
+    newly_set: bool  # true if this call just SET the PIN for the first time, rather than verifying an existing one
+
+
+class MeResult(BaseModel):
+    profile_id: int
+    username: str
+    is_admin: bool
