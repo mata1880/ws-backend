@@ -276,3 +276,15 @@ class MeResult(BaseModel):
     profile_id: int
     username: str
     is_admin: bool
+
+
+class CreateProfileRequest(BaseModel):
+    username: str
+
+
+class ProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    username: str
+    is_admin: bool
+    has_pin: bool  # whether they've logged in and set their PIN yet, without exposing the hash itself
