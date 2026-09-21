@@ -6,28 +6,51 @@ from sqlalchemy import func
 
 from .. import models, schemas, utils, scrape_bridge
 from ..database import get_db
+from .auth import get_current_profile_or_default
 
 router = APIRouter(prefix="/collections", tags=["collections"])
 
 
+def _owned_collection(db: Session, collection_id: int, profile: models.Profile) -> models.Collection:
+    """Fetches a collection and verifies it belongs to this profile — 404
+    (not 403) either way, so a guessed ID doesn't confirm anything exists."""
+    c = db.query(models.Collection).filter(
+        models.Collection.id == collection_id, models.Collection.profile_id == profile.id
+    ).first()
+    if not c:
+        raise HTTPException(404, "Collection not found")
+    return c
+
+
 @router.get("", response_model=List[schemas.CollectionOut])
-def list_collections(db: Session = Depends(get_db)):
-    return db.query(models.Collection).order_by(models.Collection.sort_order, models.Collection.name).all()
+def list_collections(db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+    return (
+        db.query(models.Collection)
+        .filter(models.Collection.profile_id == profile.id)
+        .order_by(models.Collection.sort_order, models.Collection.name)
+        .all()
+    )
 
 
 @router.put("/reorder", status_code=204)
-def reorder_collections(body: schemas.ReorderRequest, db: Session = Depends(get_db)):
+def reorder_collections(body: schemas.ReorderRequest, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     for i, cid in enumerate(body.ids):
-        db.query(models.Collection).filter(models.Collection.id == cid).update({"sort_order": i})
+        db.query(models.Collection).filter(
+            models.Collection.id == cid, models.Collection.profile_id == profile.id
+        ).update({"sort_order": i})
     db.commit()
 
 
 @router.post("", response_model=schemas.CollectionOut, status_code=201)
-def create_collection(body: schemas.CollectionCreate, db: Session = Depends(get_db)):
-    if db.query(models.Collection).filter(models.Collection.name == body.name).first():
+def create_collection(body: schemas.CollectionCreate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+    if db.query(models.Collection).filter(
+        models.Collection.name == body.name, models.Collection.profile_id == profile.id
+    ).first():
         raise HTTPException(409, "A collection with that name already exists")
-    max_order = db.query(func.max(models.Collection.sort_order)).scalar() or 0
-    c = models.Collection(name=body.name, sort_order=max_order + 1)
+    max_order = db.query(func.max(models.Collection.sort_order)).filter(
+        models.Collection.profile_id == profile.id
+    ).scalar() or 0
+    c = models.Collection(name=body.name, sort_order=max_order + 1, profile_id=profile.id)
     db.add(c)
     db.commit()
     db.refresh(c)
@@ -35,10 +58,8 @@ def create_collection(body: schemas.CollectionCreate, db: Session = Depends(get_
 
 
 @router.patch("/{collection_id}", response_model=schemas.CollectionOut)
-def rename_collection(collection_id: int, body: schemas.CollectionRename, db: Session = Depends(get_db)):
-    c = db.query(models.Collection).get(collection_id)
-    if not c:
-        raise HTTPException(404, "Collection not found")
+def rename_collection(collection_id: int, body: schemas.CollectionRename, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+    c = _owned_collection(db, collection_id, profile)
     c.name = body.name
     db.commit()
     db.refresh(c)
@@ -46,10 +67,8 @@ def rename_collection(collection_id: int, body: schemas.CollectionRename, db: Se
 
 
 @router.delete("/{collection_id}", status_code=204)
-def delete_collection(collection_id: int, db: Session = Depends(get_db)):
-    c = db.query(models.Collection).get(collection_id)
-    if not c:
-        raise HTTPException(404, "Collection not found")
+def delete_collection(collection_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+    c = _owned_collection(db, collection_id, profile)
     # Copies aren't deleted — they just become unfiled (collection_id=None),
     # which is also exactly the "greyed out in binder" trigger. Nothing you
     # own silently disappears just because its collection got deleted.
@@ -59,9 +78,8 @@ def delete_collection(collection_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{collection_id}/copies", response_model=List[schemas.CopyWithCard])
-def list_collection_copies(collection_id: int, db: Session = Depends(get_db)):
-    if not db.query(models.Collection).get(collection_id):
-        raise HTTPException(404, "Collection not found")
+def list_collection_copies(collection_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+    _owned_collection(db, collection_id, profile)
     copies = db.query(models.Copy).filter(models.Copy.collection_id == collection_id).all()
     cards_by_id = utils.cards_with_price_batch(db, [c.card for c in copies])
     return [
@@ -71,11 +89,10 @@ def list_collection_copies(collection_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{collection_id}/copies-of-card/{card_id}", response_model=List[schemas.CopyOut])
-def copies_of_card_in_collection(collection_id: int, card_id: int, db: Session = Depends(get_db)):
+def copies_of_card_in_collection(collection_id: int, card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """Every copy of this one card that's filed into this collection —
     powers the quantity stepper (- X +) on the add-to-collection picker."""
-    if not db.query(models.Collection).get(collection_id):
-        raise HTTPException(404, "Collection not found")
+    _owned_collection(db, collection_id, profile)
     return (
         db.query(models.Copy)
         .filter(models.Copy.collection_id == collection_id, models.Copy.card_id == card_id)
@@ -85,10 +102,8 @@ def copies_of_card_in_collection(collection_id: int, card_id: int, db: Session =
 
 
 @router.get("/{collection_id}/value", response_model=schemas.CollectionValueOut)
-def collection_value(collection_id: int, db: Session = Depends(get_db)):
-    c = db.query(models.Collection).get(collection_id)
-    if not c:
-        raise HTTPException(404, "Collection not found")
+def collection_value(collection_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+    c = _owned_collection(db, collection_id, profile)
 
     copies = db.query(models.Copy).filter(models.Copy.collection_id == collection_id).all()
     total_sell = 0
@@ -117,11 +132,10 @@ def collection_value(collection_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{collection_id}/price-check", response_model=schemas.PriceCheckResult)
-def price_check_collection(collection_id: int, db: Session = Depends(get_db)):
+def price_check_collection(collection_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """Fetches a price only for cards in this collection that don't have
     one yet — fast, catches up new additions without re-checking the rest."""
-    if not db.query(models.Collection).get(collection_id):
-        raise HTTPException(404, "Collection not found")
+    _owned_collection(db, collection_id, profile)
     copies = db.query(models.Copy).filter(models.Copy.collection_id == collection_id).all()
     cards = [c.card for c in copies]
     try:
@@ -132,11 +146,10 @@ def price_check_collection(collection_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{collection_id}/price-update", response_model=schemas.PriceUpdateResult)
-def price_update_collection(collection_id: int, body: schemas.PriceUpdateRequest = schemas.PriceUpdateRequest(), db: Session = Depends(get_db)):
+def price_update_collection(collection_id: int, body: schemas.PriceUpdateRequest = schemas.PriceUpdateRequest(), db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """Re-checks EVERY card in this collection regardless of whether it
     already has a price, and reports which ones' sell/buy price changed."""
-    if not db.query(models.Collection).get(collection_id):
-        raise HTTPException(404, "Collection not found")
+    _owned_collection(db, collection_id, profile)
     copies = db.query(models.Copy).filter(models.Copy.collection_id == collection_id).all()
     cards = [c.card for c in copies]
     try:

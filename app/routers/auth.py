@@ -72,6 +72,36 @@ def get_current_profile(
     return profile
 
 
+def get_current_profile_or_default(
+    authorization: str = Header(default=None),
+    db: DbSession = Depends(get_db),
+) -> models.Profile:
+    """
+    Phase-3 safety net: behaves exactly like get_current_profile when a
+    valid token is present, but falls back to the original starter
+    profile (whoever has the lowest id — "Mata", from the profiles
+    migration) instead of raising 401 when there's no token at all.
+
+    This is what lets enforcement get turned on router-by-router without
+    ever taking the live, not-yet-updated frontend down — every request
+    it currently makes has no Authorization header, so it keeps landing
+    on the same profile that already owns all the existing data. Once
+    the frontend actually sends real tokens (phase 4) and that's been
+    confirmed working, this fallback gets removed (phase 5) so a request
+    with no valid token is genuinely rejected instead of silently
+    allowed through.
+
+    A malformed/expired token is still a real error, not a silent
+    fallback — this only relaxes the "nothing sent at all" case.
+    """
+    if not authorization:
+        default_profile = db.query(models.Profile).order_by(models.Profile.id).first()
+        if not default_profile:
+            raise HTTPException(401, "No profile exists yet.")
+        return default_profile
+    return get_current_profile(authorization=authorization, db=db)
+
+
 @router.get("/me", response_model=schemas.MeResult)
 def me(profile: models.Profile = Depends(get_current_profile)):
     return schemas.MeResult(profile_id=profile.id, username=profile.username, is_admin=profile.is_admin)
