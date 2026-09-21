@@ -6,6 +6,7 @@ from sqlalchemy import func
 
 from .. import models, schemas, scrape_bridge
 from ..database import get_db
+from .auth import get_current_profile_or_default
 
 router = APIRouter(prefix="/binders", tags=["binders"])
 
@@ -34,6 +35,15 @@ def _validate_layout(layout: str):
         raise HTTPException(422, f"layout must be one of {models.VALID_LAYOUTS}")
 
 
+def _owned_binder(db: Session, binder_id: int, profile: models.Profile) -> models.Binder:
+    b = db.query(models.Binder).filter(
+        models.Binder.id == binder_id, models.Binder.profile_id == profile.id
+    ).first()
+    if not b:
+        raise HTTPException(404, "Binder not found")
+    return b
+
+
 def _slot_out(slot: models.BinderSlot, wishlist_by_card: dict = None, db: Session = None) -> schemas.BinderSlotOut:
     copy = slot.copy
     if wishlist_by_card is not None:
@@ -57,24 +67,35 @@ def _slot_out(slot: models.BinderSlot, wishlist_by_card: dict = None, db: Sessio
 
 
 @router.get("", response_model=List[schemas.BinderOut])
-def list_binders(db: Session = Depends(get_db)):
-    return db.query(models.Binder).order_by(models.Binder.sort_order, models.Binder.name).all()
+def list_binders(db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+    return (
+        db.query(models.Binder)
+        .filter(models.Binder.profile_id == profile.id)
+        .order_by(models.Binder.sort_order, models.Binder.name)
+        .all()
+    )
 
 
 @router.put("/reorder", status_code=204)
-def reorder_binders(body: schemas.ReorderRequest, db: Session = Depends(get_db)):
+def reorder_binders(body: schemas.ReorderRequest, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     for i, bid in enumerate(body.ids):
-        db.query(models.Binder).filter(models.Binder.id == bid).update({"sort_order": i})
+        db.query(models.Binder).filter(
+            models.Binder.id == bid, models.Binder.profile_id == profile.id
+        ).update({"sort_order": i})
     db.commit()
 
 
 @router.post("", response_model=schemas.BinderOut, status_code=201)
-def create_binder(body: schemas.BinderCreate, db: Session = Depends(get_db)):
+def create_binder(body: schemas.BinderCreate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     _validate_layout(body.layout)
-    if db.query(models.Binder).filter(models.Binder.name == body.name).first():
+    if db.query(models.Binder).filter(
+        models.Binder.name == body.name, models.Binder.profile_id == profile.id
+    ).first():
         raise HTTPException(409, "A binder with that name already exists")
-    max_order = db.query(func.max(models.Binder.sort_order)).scalar() or 0
-    b = models.Binder(name=body.name, layout=body.layout, sort_order=max_order + 1)
+    max_order = db.query(func.max(models.Binder.sort_order)).filter(
+        models.Binder.profile_id == profile.id
+    ).scalar() or 0
+    b = models.Binder(name=body.name, layout=body.layout, sort_order=max_order + 1, profile_id=profile.id)
     db.add(b)
     db.commit()
     db.refresh(b)
@@ -82,10 +103,8 @@ def create_binder(body: schemas.BinderCreate, db: Session = Depends(get_db)):
 
 
 @router.patch("/{binder_id}", response_model=schemas.BinderOut)
-def update_binder(binder_id: int, body: schemas.BinderUpdate, db: Session = Depends(get_db)):
-    b = db.query(models.Binder).get(binder_id)
-    if not b:
-        raise HTTPException(404, "Binder not found")
+def update_binder(binder_id: int, body: schemas.BinderUpdate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+    b = _owned_binder(db, binder_id, profile)
     if body.layout is not None:
         _validate_layout(body.layout)
         b.layout = body.layout
@@ -97,10 +116,8 @@ def update_binder(binder_id: int, body: schemas.BinderUpdate, db: Session = Depe
 
 
 @router.delete("/{binder_id}", status_code=204)
-def delete_binder(binder_id: int, db: Session = Depends(get_db)):
-    b = db.query(models.Binder).get(binder_id)
-    if not b:
-        raise HTTPException(404, "Binder not found")
+def delete_binder(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+    b = _owned_binder(db, binder_id, profile)
     db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).delete()
     db.query(models.BinderPageLabel).filter(models.BinderPageLabel.binder_id == binder_id).delete()
     db.delete(b)
@@ -108,15 +125,13 @@ def delete_binder(binder_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{binder_id}/slots", response_model=List[schemas.BinderSlotOut])
-def get_slots(binder_id: int, db: Session = Depends(get_db)):
+def get_slots(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """
     Returns only OCCUPIED (or planned) slots — the frontend knows the
     binder's layout and therefore the page size, and renders empty slots
     itself for whatever indices aren't in this list.
     """
-    b = db.query(models.Binder).get(binder_id)
-    if not b:
-        raise HTTPException(404, "Binder not found")
+    _owned_binder(db, binder_id, profile)
     slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).all()
     card_ids = list({s.card_id for s in slots})
     wishlist_by_card = {}
@@ -129,7 +144,7 @@ def get_slots(binder_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{binder_id}/slots/move", response_model=List[schemas.BinderSlotOut])
-def move_slot(binder_id: int, body: schemas.MoveSlotRequest, db: Session = Depends(get_db)):
+def move_slot(binder_id: int, body: schemas.MoveSlotRequest, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """
     Moves (or swaps, if the destination is occupied) a card between two
     slots in ONE request. The frontend used to do this as up to 4
@@ -143,8 +158,7 @@ def move_slot(binder_id: int, body: schemas.MoveSlotRequest, db: Session = Depen
     swallowed by that route's {slot_index} path parameter (which is
     exactly the bug that shipped here originally).
     """
-    if not db.query(models.Binder).get(binder_id):
-        raise HTTPException(404, "Binder not found")
+    _owned_binder(db, binder_id, profile)
 
     from_slot = (
         db.query(models.BinderSlot)
@@ -195,7 +209,7 @@ def move_slot(binder_id: int, body: schemas.MoveSlotRequest, db: Session = Depen
 
 
 @router.post("/{binder_id}/slots/{slot_index}", response_model=schemas.BinderSlotOut)
-def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest, db: Session = Depends(get_db)):
+def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """
     Two ways to fill a slot:
     - copy_id given: link an owned copy (must physically fit this binder's layout).
@@ -205,9 +219,7 @@ def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest
       button elsewhere, which reuses an existing planned slot for that
       card instead of creating a second one).
     """
-    b = db.query(models.Binder).get(binder_id)
-    if not b:
-        raise HTTPException(404, "Binder not found")
+    b = _owned_binder(db, binder_id, profile)
 
     existing = (
         db.query(models.BinderSlot)
@@ -217,7 +229,9 @@ def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest
 
     if body.copy_id is not None:
         copy = db.query(models.Copy).get(body.copy_id)
-        if not copy:
+        if not copy or copy.profile_id != profile.id:
+            # Same 404 either way — a copy that exists but belongs to someone
+            # else should look identical to one that doesn't exist at all.
             raise HTTPException(404, "Copy not found")
         allowed = FRAME_COMPATIBILITY[_resolved_layout(b.layout)]
         if copy.frame_type not in allowed:
@@ -262,7 +276,8 @@ def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest
 
 
 @router.delete("/{binder_id}/slots/{slot_index}", status_code=204)
-def unassign_slot(binder_id: int, slot_index: int, db: Session = Depends(get_db)):
+def unassign_slot(binder_id: int, slot_index: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+    _owned_binder(db, binder_id, profile)
     slot = (
         db.query(models.BinderSlot)
         .filter(models.BinderSlot.binder_id == binder_id, models.BinderSlot.slot_index == slot_index)
@@ -275,29 +290,32 @@ def unassign_slot(binder_id: int, slot_index: int, db: Session = Depends(get_db)
 
 
 @router.get("/{binder_id}/available-copies", response_model=List[schemas.CopyOut])
-def available_copies(binder_id: int, card_id: int, db: Session = Depends(get_db)):
+def available_copies(binder_id: int, card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """
     For the '+' button on a binder slot, or the send-to-binder flow:
-    which of this card's copies are currently unplaced (not linked to any
-    slot) and physically fit this binder's layout.
+    which of YOUR copies of this card are currently unplaced (not linked
+    to any slot) and physically fit this binder's layout.
     """
-    b = db.query(models.Binder).get(binder_id)
-    if not b:
-        raise HTTPException(404, "Binder not found")
+    b = _owned_binder(db, binder_id, profile)
     allowed = FRAME_COMPATIBILITY[_resolved_layout(b.layout)]
     placed_copy_ids = {
         row.copy_id for row in
         db.query(models.BinderSlot.copy_id).filter(models.BinderSlot.copy_id.isnot(None))
     }
-    copies = db.query(models.Copy).filter(models.Copy.card_id == card_id, models.Copy.frame_type.in_(allowed)).all()
+    copies = (
+        db.query(models.Copy)
+        .filter(models.Copy.card_id == card_id, models.Copy.profile_id == profile.id, models.Copy.frame_type.in_(allowed))
+        .all()
+    )
     return [c for c in copies if c.id not in placed_copy_ids]
 
 
 @router.get("/{binder_id}/planned-slot", response_model=schemas.BinderSlotOut)
-def find_planned_slot(binder_id: int, card_id: int, db: Session = Depends(get_db)):
+def find_planned_slot(binder_id: int, card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """Is there already an unfilled (planned) slot for this card in this
     binder? Used by the send-to-binder flow to fill an existing
     placeholder instead of creating a duplicate one. 404 if none."""
+    _owned_binder(db, binder_id, profile)
     slot = (
         db.query(models.BinderSlot)
         .filter(
@@ -313,19 +331,17 @@ def find_planned_slot(binder_id: int, card_id: int, db: Session = Depends(get_db
 
 
 @router.get("/{binder_id}/page-labels", response_model=List[schemas.BinderPageLabelOut])
-def list_page_labels(binder_id: int, db: Session = Depends(get_db)):
+def list_page_labels(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """Every page in this binder that's been given a custom name."""
-    if not db.query(models.Binder).get(binder_id):
-        raise HTTPException(404, "Binder not found")
+    _owned_binder(db, binder_id, profile)
     labels = db.query(models.BinderPageLabel).filter(models.BinderPageLabel.binder_id == binder_id).all()
     return [schemas.BinderPageLabelOut(page_number=l.page_number, name=l.name) for l in labels]
 
 
 @router.put("/{binder_id}/pages/{page_number}/label", response_model=schemas.BinderPageLabelOut)
-def set_page_label(binder_id: int, page_number: int, body: schemas.BinderPageLabelSet, db: Session = Depends(get_db)):
+def set_page_label(binder_id: int, page_number: int, body: schemas.BinderPageLabelSet, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """Sets (or clears, if name is empty) a page's custom name."""
-    if not db.query(models.Binder).get(binder_id):
-        raise HTTPException(404, "Binder not found")
+    _owned_binder(db, binder_id, profile)
     if page_number < 1:
         raise HTTPException(422, "page_number must be 1 or greater")
 
@@ -351,16 +367,14 @@ def set_page_label(binder_id: int, page_number: int, body: schemas.BinderPageLab
 
 
 @router.get("/{binder_id}/value", response_model=schemas.BinderValueOut)
-def binder_value(binder_id: int, db: Session = Depends(get_db)):
+def binder_value(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """
     Sums current sell/buy value for this binder's slots, split into what
     you actually own right now (a real copy linked AND filed into a
     collection) vs. what's greyed out (planned, or owned but not filed
     anywhere) — plus a combined total across both.
     """
-    b = db.query(models.Binder).get(binder_id)
-    if not b:
-        raise HTTPException(404, "Binder not found")
+    b = _owned_binder(db, binder_id, profile)
 
     slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).all()
 
@@ -402,7 +416,7 @@ def binder_value(binder_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{binder_id}/fillable", response_model=List[schemas.FillableSlotOut])
-def fillable_slots(binder_id: int, db: Session = Depends(get_db)):
+def fillable_slots(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """
     Which of this binder's planned (greyed, no-copy) slots currently have
     an owned, collection-filed copy available to fill them? Drives the
@@ -411,8 +425,7 @@ def fillable_slots(binder_id: int, db: Session = Depends(get_db)):
     (that's been removed: you place cards into binders on purpose now,
     not via automatic priority ordering).
     """
-    if not db.query(models.Binder).get(binder_id):
-        raise HTTPException(404, "Binder not found")
+    _owned_binder(db, binder_id, profile)
 
     placed_copy_ids = {
         row.copy_id for row in
@@ -433,7 +446,11 @@ def fillable_slots(binder_id: int, db: Session = Depends(get_db)):
     if card_ids:
         for c in (
             db.query(models.Copy)
-            .filter(models.Copy.card_id.in_(card_ids), models.Copy.collection_id.isnot(None))
+            .filter(
+                models.Copy.card_id.in_(card_ids),
+                models.Copy.profile_id == profile.id,
+                models.Copy.collection_id.isnot(None),
+            )
             .all()
         ):
             candidates_by_card.setdefault(c.card_id, []).append(c)
@@ -448,10 +465,9 @@ def fillable_slots(binder_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{binder_id}/fill-all", response_model=schemas.FillAllResult)
-def fill_all(binder_id: int, db: Session = Depends(get_db)):
+def fill_all(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """Fills every currently-fillable planned slot in this binder in one go."""
-    if not db.query(models.Binder).get(binder_id):
-        raise HTTPException(404, "Binder not found")
+    _owned_binder(db, binder_id, profile)
 
     filled_slots = []
     # Loop rather than reuse fillable_slots()'s single pass, since filling
@@ -470,7 +486,11 @@ def fill_all(binder_id: int, db: Session = Depends(get_db)):
         for slot in planned:
             candidate = (
                 db.query(models.Copy)
-                .filter(models.Copy.card_id == slot.card_id, models.Copy.collection_id.isnot(None))
+                .filter(
+                    models.Copy.card_id == slot.card_id,
+                    models.Copy.profile_id == profile.id,
+                    models.Copy.collection_id.isnot(None),
+                )
                 .all()
             )
             available = next((c for c in candidate if c.id not in placed_copy_ids), None)
@@ -487,11 +507,10 @@ def fill_all(binder_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{binder_id}/price-check", response_model=schemas.PriceCheckResult)
-def price_check_binder(binder_id: int, db: Session = Depends(get_db)):
+def price_check_binder(binder_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """Fetches a price only for cards currently placed in this binder that
     don't have one yet — fast, catches up new additions without re-checking the rest."""
-    if not db.query(models.Binder).get(binder_id):
-        raise HTTPException(404, "Binder not found")
+    _owned_binder(db, binder_id, profile)
     slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).all()
     cards = [s.card for s in slots]
     try:
@@ -502,11 +521,10 @@ def price_check_binder(binder_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{binder_id}/price-update", response_model=schemas.PriceUpdateResult)
-def price_update_binder(binder_id: int, body: schemas.PriceUpdateRequest = schemas.PriceUpdateRequest(), db: Session = Depends(get_db)):
+def price_update_binder(binder_id: int, body: schemas.PriceUpdateRequest = schemas.PriceUpdateRequest(), db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """Re-checks EVERY card currently placed in this binder regardless of
     whether it already has a price, and reports which ones' sell/buy price changed."""
-    if not db.query(models.Binder).get(binder_id):
-        raise HTTPException(404, "Binder not found")
+    _owned_binder(db, binder_id, profile)
     slots = db.query(models.BinderSlot).filter(models.BinderSlot.binder_id == binder_id).all()
     cards = [s.card for s in slots]
     try:

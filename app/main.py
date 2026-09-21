@@ -8,6 +8,7 @@ from .routers import cards, scrape, collections, wishlists, binders, copies, aut
 models.Base.metadata.create_all(bind=engine)
 
 with SessionLocal() as _db:
+    migrations.add_copy_profile_id_column(_db)
     migrations.migrate_legacy_binder_placements(_db)
     # add_profiles must run BEFORE add_sort_order_columns: since Collection/
     # Wishlist/Binder's model classes now declare profile_id, ANY ORM query

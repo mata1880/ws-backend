@@ -12,6 +12,25 @@ from sqlalchemy import text
 from . import models
 
 
+def add_copy_profile_id_column(db: Session):
+    """
+    Just adds copies.profile_id — nothing else. Deliberately its own tiny
+    migration, run BEFORE anything else: migrate_legacy_binder_placements
+    (below) already does an ORM query against Copy, and once profile_id
+    is declared on the Copy model, EVERY ORM query against it — including
+    that unrelated one — implicitly selects that column too, so it has
+    to actually exist in the database before any of them run. Same class
+    of bug as the sort_order/profile_id ordering issue from the
+    collections/wishlists/binders migration; this is what prevents it
+    from happening again here.
+    """
+    try:
+        db.execute(text("ALTER TABLE copies ADD COLUMN profile_id INTEGER REFERENCES profiles(id)"))
+        db.commit()
+    except Exception:
+        db.rollback()  # column already exists
+
+
 def migrate_legacy_binder_placements(db: Session):
     legacy_copies = (
         db.query(models.Copy)
@@ -145,5 +164,15 @@ def add_profiles(db: Session):
 
         for model in (models.Collection, models.Wishlist, models.Binder):
             db.query(model).filter(model.profile_id.is_(None)).update({"profile_id": starter.id})
+        db.commit()
+
+    # Copy is backfilled separately, and on EVERY startup rather than only
+    # the first — unlike Collection/Wishlist/Binder, copies.py hasn't
+    # necessarily been updated yet to set profile_id when creating a new
+    # one, so this keeps self-healing anything that slips through with a
+    # null profile_id until that catches up too.
+    default_profile = db.query(models.Profile).order_by(models.Profile.id).first()
+    if default_profile:
+        db.query(models.Copy).filter(models.Copy.profile_id.is_(None)).update({"profile_id": default_profile.id})
         db.commit()
 

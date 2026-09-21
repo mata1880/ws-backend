@@ -205,6 +205,7 @@ class Copy(Base):
     id = Column(Integer, primary_key=True)
     card_id = Column(Integer, ForeignKey("cards.id"), nullable=False)
     copy_number = Column(Integer, nullable=False, default=1)  # display order within this card's copies
+    profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=True)  # who owns this physical copy — set directly, since collection_id can be null (unfiled)
 
     collection_id = Column(Integer, ForeignKey("collections.id"), nullable=True)
     binder_id = Column(Integer, ForeignKey("binders.id"), nullable=True)
