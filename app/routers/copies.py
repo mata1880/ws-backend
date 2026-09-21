@@ -6,21 +6,43 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_db
+from .auth import get_current_profile_or_default
 from .binders import FRAME_COMPATIBILITY, _resolved_layout
 
 router = APIRouter(prefix="/copies", tags=["copies"])
 
 
+def _owned_copy(db: Session, copy_id: int, profile: models.Profile) -> models.Copy:
+    copy = db.query(models.Copy).filter(
+        models.Copy.id == copy_id, models.Copy.profile_id == profile.id
+    ).first()
+    if not copy:
+        raise HTTPException(404, "Copy not found")
+    return copy
+
+
+def _owned_collection_id(db: Session, collection_id: int, profile: models.Profile) -> int:
+    """Validates a collection_id belongs to this profile before it's used
+    to file a copy — 404 either way, same reasoning as elsewhere: a
+    collection that exists but belongs to someone else should look
+    identical to one that doesn't exist at all."""
+    if not db.query(models.Collection).filter(
+        models.Collection.id == collection_id, models.Collection.profile_id == profile.id
+    ).first():
+        raise HTTPException(404, "Collection not found")
+    return collection_id
+
+
 @router.post("", response_model=schemas.CopyOut, status_code=201)
-def create_copy(body: schemas.CopyCreate, db: Session = Depends(get_db)):
+def create_copy(body: schemas.CopyCreate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """The '+' button on Browse/Collection: adds a brand new physical copy.
     frame_type defaults from the card's rarity (sleeve for bulk-common
     rarities, toploader otherwise) unless explicitly given."""
     card = db.query(models.Card).get(body.card_id)
     if not card:
         raise HTTPException(404, "Card not found")
-    if body.collection_id is not None and not db.query(models.Collection).get(body.collection_id):
-        raise HTTPException(404, "Collection not found")
+    if body.collection_id is not None:
+        _owned_collection_id(db, body.collection_id, profile)
 
     frame_type = body.frame_type or models.default_frame_type(card.rarity)
     if frame_type not in models.VALID_FRAME_TYPES:
@@ -35,6 +57,7 @@ def create_copy(body: schemas.CopyCreate, db: Session = Depends(get_db)):
     copy = models.Copy(
         card_id=body.card_id,
         copy_number=next_number,
+        profile_id=profile.id,
         collection_id=body.collection_id,
         grade=body.grade,
         frame_type=frame_type,
@@ -49,24 +72,40 @@ def create_copy(body: schemas.CopyCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/by-card/{card_id}", response_model=List[schemas.CopyOut])
-def copies_for_card(card_id: int, db: Session = Depends(get_db)):
-    """All copies of one card, across every collection — used to build the
-    stacked-tile copy dropdown (grade/note editing, 'which copy' pickers)."""
-    return db.query(models.Copy).filter(models.Copy.card_id == card_id).order_by(models.Copy.copy_number).all()
+def copies_for_card(card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
+    """All of YOUR copies of one card, across every collection — used to
+    build the stacked-tile copy dropdown (grade/note editing, 'which
+    copy' pickers)."""
+    return (
+        db.query(models.Copy)
+        .filter(models.Copy.card_id == card_id, models.Copy.profile_id == profile.id)
+        .order_by(models.Copy.copy_number)
+        .all()
+    )
 
 
 @router.get("/counts-for-card/{card_id}", response_model=List[schemas.CollectionCopyCount])
-def counts_for_card(card_id: int, db: Session = Depends(get_db)):
+def counts_for_card(card_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """
-    How many copies of this one card sit in EACH collection — every
-    collection listed, zero-filled where there are none. Powers the
-    inline -/+ stepper directly on each row of the "add to collection"
-    picker, so adjusting quantity doesn't need a second popup.
+    How many copies of this one card sit in EACH of YOUR collections —
+    every one of your collections listed, zero-filled where there are
+    none. Powers the inline -/+ stepper directly on each row of the "add
+    to collection" picker, so adjusting quantity doesn't need a second
+    popup.
     """
-    collections = db.query(models.Collection).order_by(models.Collection.sort_order, models.Collection.name).all()
+    collections = (
+        db.query(models.Collection)
+        .filter(models.Collection.profile_id == profile.id)
+        .order_by(models.Collection.sort_order, models.Collection.name)
+        .all()
+    )
     counts = dict(
         db.query(models.Copy.collection_id, func.count(models.Copy.id))
-        .filter(models.Copy.card_id == card_id, models.Copy.collection_id.isnot(None))
+        .filter(
+            models.Copy.card_id == card_id,
+            models.Copy.profile_id == profile.id,
+            models.Copy.collection_id.isnot(None),
+        )
         .group_by(models.Copy.collection_id)
         .all()
     )
@@ -77,22 +116,19 @@ def counts_for_card(card_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/{copy_id}", response_model=schemas.CopyOut)
-def update_copy(copy_id: int, body: schemas.CopyUpdate, db: Session = Depends(get_db)):
+def update_copy(copy_id: int, body: schemas.CopyUpdate, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """
     Covers both the settings-gear edits (grade/frame/note/purchase price)
     and moving a copy between collections. Use clear_collection=true to
     explicitly un-file a copy (collection_id alone can't mean that, since
     omitting the field also looks like None in JSON).
     """
-    copy = db.query(models.Copy).get(copy_id)
-    if not copy:
-        raise HTTPException(404, "Copy not found")
+    copy = _owned_copy(db, copy_id, profile)
 
     if body.clear_collection:
         copy.collection_id = None
     elif body.collection_id is not None:
-        if not db.query(models.Collection).get(body.collection_id):
-            raise HTTPException(404, "Collection not found")
+        _owned_collection_id(db, body.collection_id, profile)
         copy.collection_id = body.collection_id
 
     if body.frame_type is not None:
@@ -124,7 +160,7 @@ def update_copy(copy_id: int, body: schemas.CopyUpdate, db: Session = Depends(ge
 
 
 @router.delete("/{copy_id}", status_code=204)
-def delete_copy(copy_id: int, db: Session = Depends(get_db)):
+def delete_copy(copy_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile_or_default)):
     """
     Removes a copy entirely (e.g. sold). If it was linked to a binder
     slot, that slot is NOT deleted — it just reverts to "planned" (no
@@ -134,13 +170,9 @@ def delete_copy(copy_id: int, db: Session = Depends(get_db)):
     same as removing it from a collection already did before binders
     supported planned placements.
     """
-    copy = db.query(models.Copy).get(copy_id)
-    if not copy:
-        raise HTTPException(404, "Copy not found")
+    copy = _owned_copy(db, copy_id, profile)
     slot = db.query(models.BinderSlot).filter(models.BinderSlot.copy_id == copy.id).first()
     if slot is not None:
         slot.copy_id = None
     db.delete(copy)
     db.commit()
-
-
