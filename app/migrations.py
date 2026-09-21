@@ -82,3 +82,68 @@ def add_sort_order_columns(db: Session):
                 row.sort_order = i
             db.commit()
 
+
+def add_profiles(db: Session):
+    """
+    Phase 1 of profile support: adds the profiles table, adds a
+    profile_id column to collections/wishlists/binders, and assigns
+    every EXISTING row to one starter profile ("Mata", admin) so nothing
+    is orphaned. Nothing is enforced yet — every endpoint still works
+    exactly as before, unauthenticated, until a later phase turns that
+    on. Safe to run on every startup.
+
+    pin_hash is deliberately left null here — a PIN only ever gets set
+    by someone typing it into the app's own login screen, never written
+    by a migration.
+    """
+    # The profiles TABLE itself is created automatically by create_all()
+    # in main.py, since it's a brand new table — nothing to do for that
+    # part here. This function only needs to handle the parts create_all()
+    # can't: new columns on EXISTING tables, and dropping the old
+    # global-uniqueness constraints those tables had on `name` alone
+    # (now replaced by a per-profile uniqueness constraint instead).
+
+    for table in ("collections", "wishlists", "binders"):
+        try:
+            db.execute(text(f"ALTER TABLE {table} ADD COLUMN profile_id INTEGER REFERENCES profiles(id)"))
+            db.commit()
+        except Exception:
+            db.rollback()  # column already exists
+
+        # Drop whatever the old single-column UNIQUE constraint on `name`
+        # actually got auto-named (Postgres picks this itself, so it's
+        # looked up rather than guessed), now that name uniqueness is
+        # meant to be per-profile instead of global.
+        try:
+            constraint_name = db.execute(text("""
+                SELECT tc.constraint_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.constraint_column_usage ccu
+                  ON tc.constraint_name = ccu.constraint_name
+                  AND tc.table_name = ccu.table_name
+                WHERE tc.table_name = :table
+                  AND tc.constraint_type = 'UNIQUE'
+                  AND ccu.column_name = 'name'
+                LIMIT 1
+            """), {"table": table}).scalar()
+            if constraint_name:
+                db.execute(text(f'ALTER TABLE {table} DROP CONSTRAINT "{constraint_name}"'))
+                db.commit()
+        except Exception:
+            db.rollback()  # already dropped, or this isn't Postgres — fine either way
+
+    # One starter profile owns everything that exists so far. Only ever
+    # created once — if "Mata" already exists, or ANY profile already
+    # exists, this is a no-op (covers both a plain re-run, and the case
+    # where profiles now exist because someone's actually registered).
+    if db.query(models.Profile).count() == 0:
+        starter = models.Profile(username="Mata", is_admin=True, pin_hash=None)
+        db.add(starter)
+        db.commit()
+        db.refresh(starter)
+        print(f"[migration] Created starter admin profile 'Mata' (id={starter.id}) — PIN not set yet.")
+
+        for model in (models.Collection, models.Wishlist, models.Binder):
+            db.query(model).filter(model.profile_id.is_(None)).update({"profile_id": starter.id})
+        db.commit()
+

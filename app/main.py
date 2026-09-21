@@ -10,6 +10,7 @@ models.Base.metadata.create_all(bind=engine)
 with SessionLocal() as _db:
     migrations.migrate_legacy_binder_placements(_db)
     migrations.add_sort_order_columns(_db)
+    migrations.add_profiles(_db)
 
 app = FastAPI(
     title="Weiss Schwarz Collection API",

@@ -36,6 +36,23 @@ def now_utc():
     return datetime.now(timezone.utc)
 
 
+class Profile(Base):
+    """
+    A person using this app. pin_hash is null until they've actually set
+    their PIN themselves through the app's own login/setup screen — never
+    written directly by anyone else, including via a migration script.
+    is_admin gates Prices/Price Update and unlimited Price Check.
+    """
+    __tablename__ = "profiles"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String, nullable=False, unique=True)
+    email = Column(String, nullable=True)
+    pin_hash = Column(String, nullable=True)
+    is_admin = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=now_utc)
+
+
 class Card(Base):
     __tablename__ = "cards"
 
@@ -93,9 +110,11 @@ class PriceSnapshot(Base):
 
 class Collection(Base):
     __tablename__ = "collections"
+    __table_args__ = (UniqueConstraint("profile_id", "name", name="uq_collection_profile_name"),)
 
     id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False, unique=True)
+    name = Column(String, nullable=False)
+    profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=True)  # nullable during migration; enforced once auth is on
     created_at = Column(DateTime, default=now_utc)
     sort_order = Column(Integer, nullable=False, default=0)  # for manual sidebar reordering
 
@@ -104,9 +123,11 @@ class Collection(Base):
 
 class Wishlist(Base):
     __tablename__ = "wishlists"
+    __table_args__ = (UniqueConstraint("profile_id", "name", name="uq_wishlist_profile_name"),)
 
     id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False, unique=True)
+    name = Column(String, nullable=False)
+    profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=True)
     created_at = Column(DateTime, default=now_utc)
     sort_order = Column(Integer, nullable=False, default=0)  # for manual sidebar reordering
 
@@ -137,9 +158,11 @@ VALID_LAYOUTS = ("3x3", "4x3")
 
 class Binder(Base):
     __tablename__ = "binders"
+    __table_args__ = (UniqueConstraint("profile_id", "name", name="uq_binder_profile_name"),)
 
     id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False, unique=True)
+    name = Column(String, nullable=False)
+    profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=True)
     layout = Column(String, nullable=False, default="3x3")  # one of VALID_LAYOUTS
     priority = Column(Integer, nullable=False, default=0)   # lower = higher priority for auto-placement
     sort_order = Column(Integer, nullable=False, default=0)  # for manual sidebar reordering
