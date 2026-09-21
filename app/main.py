@@ -9,8 +9,13 @@ models.Base.metadata.create_all(bind=engine)
 
 with SessionLocal() as _db:
     migrations.migrate_legacy_binder_placements(_db)
-    migrations.add_sort_order_columns(_db)
+    # add_profiles must run BEFORE add_sort_order_columns: since Collection/
+    # Wishlist/Binder's model classes now declare profile_id, ANY ORM query
+    # against them (including add_sort_order_columns' unrelated .count()
+    # calls) implicitly selects that column too — so it has to actually
+    # exist in the database first, which is what add_profiles creates.
     migrations.add_profiles(_db)
+    migrations.add_sort_order_columns(_db)
 
 app = FastAPI(
     title="Weiss Schwarz Collection API",
