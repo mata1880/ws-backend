@@ -17,19 +17,26 @@ PIN_RE = re.compile(r"^\d{6}$")
 @router.post("/login", response_model=schemas.LoginResult)
 def login(req: schemas.LoginRequest, db: DbSession = Depends(get_db)):
     """
-    Combined login AND first-time PIN setup. A profile's pin_hash starts
-    out null (set that way by the profiles migration, or whenever an
-    admin creates a new profile later) — the FIRST successful call here
-    for that profile sets it, rather than requiring a separate "register"
-    step. Every call after that verifies against what got set.
+    Open self-registration, combined with login: a username that doesn't
+    exist yet gets created right here (never admin — that's set exactly
+    once, by the original migration, and nowhere else), and whatever PIN
+    comes with it becomes that profile's PIN from now on. A username
+    that already exists but hasn't set a PIN yet behaves the same way —
+    this first successful call is what sets it. Every call after that
+    just verifies against what got set.
     """
     if not PIN_RE.match(req.pin.strip()):
         raise HTTPException(400, "PIN must be exactly 6 digits.")
     pin = req.pin.strip()
+    username = req.username.strip()
+    if not username:
+        raise HTTPException(422, "Username can't be empty.")
 
-    profile = db.query(models.Profile).filter(models.Profile.username == req.username).first()
+    profile = db.query(models.Profile).filter(models.Profile.username == username).first()
     if not profile:
-        raise HTTPException(404, "No profile with that username.")
+        profile = models.Profile(username=username, is_admin=False, pin_hash=None)
+        db.add(profile)
+        db.flush()  # get an id assigned before using it below, without a separate round trip
 
     newly_set = False
     if profile.pin_hash is None:
