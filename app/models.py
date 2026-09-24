@@ -182,7 +182,11 @@ class Binder(Base):
     copies = relationship("Copy", back_populates="binder")
 
 
-VALID_FRAME_TYPES = ("raw", "sleeve", "toploader", "one_touch", "slab")
+# The first five are legacy values (the old Frame setting) and now all mean
+# "auto" to the frontend: pick a toploader or magnetic one-touch by rarity.
+# The force_* values are explicit overrides from the Collection "Slab" setting.
+VALID_FRAME_TYPES = ("raw", "sleeve", "toploader", "one_touch", "slab",
+                     "auto", "force_toploader", "force_onetouch", "force_none")
 
 # Bulk/common rarities default to a penny sleeve; anything above that (SR,
 # RRR, SP, SSP, SEC, etc.) defaults to a toploader. This only applies when
