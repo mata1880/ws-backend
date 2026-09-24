@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
 from .auth import get_current_profile
-from .binders import FRAME_COMPATIBILITY, _resolved_layout
 
 router = APIRouter(prefix="/copies", tags=["copies"])
 
@@ -134,15 +133,6 @@ def update_copy(copy_id: int, body: schemas.CopyUpdate, db: Session = Depends(ge
     if body.frame_type is not None:
         if body.frame_type not in models.VALID_FRAME_TYPES:
             raise HTTPException(422, f"frame_type must be one of {models.VALID_FRAME_TYPES}")
-        current_slot = db.query(models.BinderSlot).filter(models.BinderSlot.copy_id == copy.id).first()
-        if current_slot is not None:
-            binder = db.query(models.Binder).get(current_slot.binder_id)
-            if binder and body.frame_type not in FRAME_COMPATIBILITY[_resolved_layout(binder.layout)]:
-                raise HTTPException(
-                    422,
-                    f"Can't change to '{body.frame_type}' — it wouldn't fit this copy's "
-                    f"current {binder.layout} binder. Remove it from the binder first.",
-                )
         copy.frame_type = body.frame_type
 
     if body.grade is not None:

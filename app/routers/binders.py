@@ -10,15 +10,9 @@ from .auth import get_current_profile
 
 router = APIRouter(prefix="/binders", tags=["binders"])
 
-# Which frame types physically fit in each binder layout — a toploader or
-# slab doesn't fit in a thin sleeve-page pocket, and nothing slabbed fits
-# in a binder at all. A planned (unowned) slot has no frame_type yet, so
-# this only gets checked once a real copy is linked to a slot.
+# Layout only controls page size now — any copy, whatever its frame type
+# (raw, sleeve, toploader, one-touch, slab), can go in any binder.
 PAGE_SIZE = {"3x3": 9, "4x3": 12}
-FRAME_COMPATIBILITY = {
-    "3x3": {"raw", "sleeve", "toploader"},
-    "4x3": {"raw", "sleeve"},
-}
 # Old layout names (removed) fall back to these so a binder created before
 # this change doesn't just start 500-ing — it behaves like the closest
 # still-supported layout instead. Edit the binder to move it onto "3x3" or
@@ -212,7 +206,7 @@ def move_slot(binder_id: int, body: schemas.MoveSlotRequest, db: Session = Depen
 def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """
     Two ways to fill a slot:
-    - copy_id given: link an owned copy (must physically fit this binder's layout).
+    - copy_id given: link an owned copy (any frame type).
     - card_id only (no copy_id): a "planned" placeholder for a card you
       don't own yet — always shows greyed out until a copy gets linked
       later (either straight to this slot, or via the send-to-binder
@@ -233,13 +227,6 @@ def assign_slot(binder_id: int, slot_index: int, body: schemas.AssignSlotRequest
             # Same 404 either way — a copy that exists but belongs to someone
             # else should look identical to one that doesn't exist at all.
             raise HTTPException(404, "Copy not found")
-        allowed = FRAME_COMPATIBILITY[_resolved_layout(b.layout)]
-        if copy.frame_type not in allowed:
-            raise HTTPException(
-                422,
-                f"A '{copy.frame_type}' copy doesn't physically fit a {b.layout} binder "
-                f"(allowed here: {', '.join(sorted(allowed))})",
-            )
         already_elsewhere = (
             db.query(models.BinderSlot)
             .filter(models.BinderSlot.copy_id == copy.id, models.BinderSlot.id != (existing.id if existing else -1))
@@ -294,17 +281,16 @@ def available_copies(binder_id: int, card_id: int, db: Session = Depends(get_db)
     """
     For the '+' button on a binder slot, or the send-to-binder flow:
     which of YOUR copies of this card are currently unplaced (not linked
-    to any slot) and physically fit this binder's layout.
+    to any slot).
     """
-    b = _owned_binder(db, binder_id, profile)
-    allowed = FRAME_COMPATIBILITY[_resolved_layout(b.layout)]
+    _owned_binder(db, binder_id, profile)
     placed_copy_ids = {
         row.copy_id for row in
         db.query(models.BinderSlot.copy_id).filter(models.BinderSlot.copy_id.isnot(None))
     }
     copies = (
         db.query(models.Copy)
-        .filter(models.Copy.card_id == card_id, models.Copy.profile_id == profile.id, models.Copy.frame_type.in_(allowed))
+        .filter(models.Copy.card_id == card_id, models.Copy.profile_id == profile.id)
         .all()
     )
     return [c for c in copies if c.id not in placed_copy_ids]

@@ -17,9 +17,8 @@ Data model. Design notes (matching the brainstorm this came out of):
 - `Wishlist` has no copies/quantity, just membership. A card can be on at
   most one wishlist at a time (enforced by a unique index on card_id in
   wishlist_items), and removal is manual only — never automatic.
-- `Binder` has a layout (3x3 / 4x5 / 5x5) which constrains which
-  frame_types are physically allowed in it (see FRAME_COMPATIBILITY in
-  routers/binders.py) and a priority used for auto-placement ordering.
+- `Binder` has a layout (3x3 / 4x3) which only sets cards-per-page — any
+  copy, whatever its frame_type, can be placed in any binder.
 """
 from datetime import datetime, timezone
 
