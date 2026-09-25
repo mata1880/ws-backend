@@ -9,6 +9,15 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./ws_collection.db")
 
+# Always use the psycopg2 driver (the one in requirements.txt). A plain
+# "postgresql://" URL lets SQLAlchemy pick its default driver, and
+# SQLAlchemy 2.1 switched that default to psycopg 3, which isn't installed.
+# That crashed the backend on startup, so name the driver explicitly.
+for _prefix in ("postgresql://", "postgres://"):
+    if DATABASE_URL.startswith(_prefix):
+        DATABASE_URL = "postgresql+psycopg2://" + DATABASE_URL[len(_prefix):]
+        break
+
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 # pool_pre_ping: test each pooled connection before handing it to a request,
 # and transparently replace it if it's dead. Neon's free tier suspends the
