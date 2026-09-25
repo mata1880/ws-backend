@@ -3,11 +3,24 @@ from typing import List
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Header
+from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
 from .. import models, schemas
 from ..database import get_db
 from ..auth import hash_pin, verify_pin, generate_token
+
+
+def _find_profile(db: DbSession, username: str):
+    """Case-insensitive username lookup: "mata", "MATA" and "Mata" are the same
+    profile. The name is still stored and shown exactly as first typed. If
+    duplicates that differ only by case already exist, the oldest one wins."""
+    return (
+        db.query(models.Profile)
+        .filter(func.lower(models.Profile.username) == username.lower())
+        .order_by(models.Profile.id)
+        .first()
+    )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -32,7 +45,7 @@ def login(req: schemas.LoginRequest, db: DbSession = Depends(get_db)):
     if not username:
         raise HTTPException(422, "Username can't be empty.")
 
-    profile = db.query(models.Profile).filter(models.Profile.username == username).first()
+    profile = _find_profile(db, username)
     if not profile:
         profile = models.Profile(username=username, is_admin=False, pin_hash=None)
         db.add(profile)
@@ -117,7 +130,7 @@ def create_profile(body: schemas.CreateProfileRequest, db: DbSession = Depends(g
     username = body.username.strip()
     if not username:
         raise HTTPException(422, "Username can't be empty.")
-    if db.query(models.Profile).filter(models.Profile.username == username).first():
+    if _find_profile(db, username):
         raise HTTPException(409, "That username is already taken.")
     new_profile = models.Profile(username=username, is_admin=False, pin_hash=None)
     db.add(new_profile)
