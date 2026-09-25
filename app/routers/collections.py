@@ -109,6 +109,8 @@ def collection_value(collection_id: int, db: Session = Depends(get_db), profile:
     total_sell = 0
     total_buy = 0
     total_cost = 0
+    costed_sell = 0
+    costed_count = 0
     for copy in copies:
         latest = (
             db.query(models.PriceSnapshot)
@@ -116,10 +118,13 @@ def collection_value(collection_id: int, db: Session = Depends(get_db), profile:
             .order_by(models.PriceSnapshot.scraped_at.desc())
             .first()
         )
-        if latest:
-            total_sell += latest.sell_price_jpy or 0
-            total_buy += latest.buy_price_jpy or 0
-        total_cost += copy.purchase_price_jpy or 0
+        sell = (latest.sell_price_jpy or 0) if latest else 0
+        total_sell += sell
+        total_buy += (latest.buy_price_jpy or 0) if latest else 0
+        if copy.purchase_price_jpy is not None:
+            total_cost += copy.purchase_price_jpy
+            costed_sell += sell
+            costed_count += 1
 
     return schemas.CollectionValueOut(
         collection_id=collection_id,
@@ -128,6 +133,9 @@ def collection_value(collection_id: int, db: Session = Depends(get_db), profile:
         total_sell_value_jpy=total_sell,
         total_buy_value_jpy=total_buy,
         total_purchase_cost_jpy=total_cost,
+        costed_copies=costed_count,
+        costed_sell_value_jpy=costed_sell,
+        profit_jpy=costed_sell - total_cost,
     )
 
 

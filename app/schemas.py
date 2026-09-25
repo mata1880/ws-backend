@@ -114,6 +114,11 @@ class CollectionValueOut(BaseModel):
     total_sell_value_jpy: int
     total_buy_value_jpy: int
     total_purchase_cost_jpy: int
+    # Profit only compares like with like: the sell value of the copies that
+    # actually HAVE a paid price, minus what was paid for them.
+    costed_copies: int = 0
+    costed_sell_value_jpy: int = 0
+    profit_jpy: int = 0
 
 
 class BinderValueOut(BaseModel):
