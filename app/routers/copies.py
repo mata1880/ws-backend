@@ -149,6 +149,31 @@ def update_copy(copy_id: int, body: schemas.CopyUpdate, db: Session = Depends(ge
     return copy
 
 
+@router.post("/{copy_id}/sell", response_model=schemas.SaleOut)
+def sell_copy(copy_id: int, body: schemas.SellRequest, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
+    """
+    Records a sale, then removes the copy (you don't own it anymore). The
+    sale row is permanent, so historic profit keeps counting it. A binder
+    slot holding the copy reverts to "planned", same as a plain delete.
+    """
+    if body.sold_price_jpy < 0:
+        raise HTTPException(422, "Sold price can't be negative.")
+    copy = _owned_copy(db, copy_id, profile)
+    paid = body.purchase_price_jpy if body.purchase_price_jpy is not None else copy.purchase_price_jpy
+    sale = models.Sale(
+        profile_id=profile.id, collection_id=copy.collection_id, card_id=copy.card_id,
+        grade=copy.grade, purchase_price_jpy=paid, sold_price_jpy=body.sold_price_jpy,
+    )
+    db.add(sale)
+    slot = db.query(models.BinderSlot).filter(models.BinderSlot.copy_id == copy.id).first()
+    if slot is not None:
+        slot.copy_id = None
+    db.delete(copy)
+    db.commit()
+    db.refresh(sale)
+    return sale
+
+
 @router.delete("/{copy_id}", status_code=204)
 def delete_copy(copy_id: int, db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     """

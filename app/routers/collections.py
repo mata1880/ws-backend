@@ -73,6 +73,8 @@ def delete_collection(collection_id: int, db: Session = Depends(get_db), profile
     # which is also exactly the "greyed out in binder" trigger. Nothing you
     # own silently disappears just because its collection got deleted.
     db.query(models.Copy).filter(models.Copy.collection_id == collection_id).update({"collection_id": None})
+    # Sale records outlive the collection; they just stop pointing at it.
+    db.query(models.Sale).filter(models.Sale.collection_id == collection_id).update({"collection_id": None})
     db.delete(c)
     db.commit()
 
@@ -106,6 +108,8 @@ def collection_value(collection_id: int, db: Session = Depends(get_db), profile:
     c = _owned_collection(db, collection_id, profile)
 
     copies = db.query(models.Copy).filter(models.Copy.collection_id == collection_id).all()
+    sales = db.query(models.Sale).filter(models.Sale.collection_id == collection_id, models.Sale.profile_id == profile.id).all()
+    costed = [s for s in sales if s.purchase_price_jpy is not None]
     total_sell = 0
     total_buy = 0
     total_cost = 0
@@ -136,6 +140,9 @@ def collection_value(collection_id: int, db: Session = Depends(get_db), profile:
         costed_copies=costed_count,
         costed_sell_value_jpy=costed_sell,
         profit_jpy=costed_sell - total_cost,
+        sales_count=len(sales),
+        costed_sales=len(costed),
+        historic_profit_jpy=sum(s.sold_price_jpy - s.purchase_price_jpy for s in costed),
     )
 
 

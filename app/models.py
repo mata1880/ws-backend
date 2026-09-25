@@ -202,6 +202,25 @@ def default_frame_type(rarity: str) -> str:
     return "sleeve" if rarity.strip().upper() in SLEEVE_RARITIES else "toploader"
 
 
+class Sale(Base):
+    """
+    A permanent record of selling one copy. The copy itself is deleted when
+    it's sold (you no longer own it), but this row stays so historic profit
+    keeps counting it. purchase_price_jpy is copied over at sale time; when
+    it's missing, the sale still counts toward sales but not toward profit.
+    """
+    __tablename__ = "sales"
+
+    id = Column(Integer, primary_key=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=False)
+    collection_id = Column(Integer, ForeignKey("collections.id"), nullable=True)  # nulled if the collection is deleted
+    card_id = Column(Integer, ForeignKey("cards.id"), nullable=False)
+    grade = Column(String, nullable=True)
+    purchase_price_jpy = Column(Integer, nullable=True)
+    sold_price_jpy = Column(Integer, nullable=False)
+    sold_at = Column(DateTime, default=now_utc)
+
+
 class Copy(Base):
     __tablename__ = "copies"
 

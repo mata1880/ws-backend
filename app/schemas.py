@@ -119,6 +119,10 @@ class CollectionValueOut(BaseModel):
     costed_copies: int = 0
     costed_sell_value_jpy: int = 0
     profit_jpy: int = 0
+    # Historic: every copy sold out of this collection, forever.
+    sales_count: int = 0
+    costed_sales: int = 0             # sales that had a purchase price, so they count toward profit
+    historic_profit_jpy: int = 0
 
 
 class BinderValueOut(BaseModel):
@@ -227,6 +231,22 @@ class CopyUpdate(BaseModel):
     note: Optional[str] = None
     purchase_price_jpy: Optional[int] = None
     date_acquired: Optional[date] = None
+
+
+class SellRequest(BaseModel):
+    sold_price_jpy: int
+    purchase_price_jpy: Optional[int] = None  # defaults to the copy's saved purchase price
+
+
+class SaleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    card_id: int
+    collection_id: Optional[int] = None
+    grade: Optional[str] = None
+    purchase_price_jpy: Optional[int] = None
+    sold_price_jpy: int
+    sold_at: datetime
 
 
 class CopyOut(BaseModel):
