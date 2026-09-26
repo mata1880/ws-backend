@@ -21,10 +21,10 @@ def _owned_wishlist(db: Session, wishlist_id: int, profile: models.Profile) -> m
 
 
 @router.get("", response_model=List[schemas.WishlistOut])
-def list_wishlists(db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
+def list_wishlists(game: str = "ws", db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     return (
         db.query(models.Wishlist)
-        .filter(models.Wishlist.profile_id == profile.id)
+        .filter(models.Wishlist.profile_id == profile.id, models.Wishlist.game == game)
         .order_by(models.Wishlist.sort_order, models.Wishlist.name)
         .all()
     )
@@ -48,7 +48,7 @@ def create_wishlist(body: schemas.WishlistCreate, db: Session = Depends(get_db),
     max_order = db.query(func.max(models.Wishlist.sort_order)).filter(
         models.Wishlist.profile_id == profile.id
     ).scalar() or 0
-    w = models.Wishlist(name=body.name, sort_order=max_order + 1, profile_id=profile.id)
+    w = models.Wishlist(name=body.name, game=body.game, sort_order=max_order + 1, profile_id=profile.id)
     db.add(w)
     db.commit()
     db.refresh(w)

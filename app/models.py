@@ -69,6 +69,7 @@ class Card(Base):
 
     id = Column(Integer, primary_key=True)
     game = Column(String, nullable=False, default="ws")
+    language = Column(String, nullable=False, default="ja")   # "ja" / "zh" / "en" — tagged now, no UI yet
     set_code = Column(String, nullable=False)          # yuyu-tei internal slug, e.g. "osk3.0"
     card_number = Column(String, nullable=False, unique=True)  # e.g. "OSK/S133-001SSP"
     name = Column(String, nullable=False, default="")
@@ -126,6 +127,7 @@ class Collection(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=True)  # nullable during migration; enforced once auth is on
+    game = Column(String, nullable=False, default="ws")   # each game keeps its own collections
     created_at = Column(DateTime, default=now_utc)
     sort_order = Column(Integer, nullable=False, default=0)  # for manual sidebar reordering
 
@@ -139,6 +141,7 @@ class Wishlist(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=True)
+    game = Column(String, nullable=False, default="ws")
     created_at = Column(DateTime, default=now_utc)
     sort_order = Column(Integer, nullable=False, default=0)  # for manual sidebar reordering
 
@@ -174,6 +177,7 @@ class Binder(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=True)
+    game = Column(String, nullable=False, default="ws")
     layout = Column(String, nullable=False, default="3x3")  # one of VALID_LAYOUTS
     priority = Column(Integer, nullable=False, default=0)   # lower = higher priority for auto-placement
     sort_order = Column(Integer, nullable=False, default=0)  # for manual sidebar reordering

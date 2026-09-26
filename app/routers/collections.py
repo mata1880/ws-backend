@@ -23,10 +23,10 @@ def _owned_collection(db: Session, collection_id: int, profile: models.Profile) 
 
 
 @router.get("", response_model=List[schemas.CollectionOut])
-def list_collections(db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
+def list_collections(game: str = "ws", db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     return (
         db.query(models.Collection)
-        .filter(models.Collection.profile_id == profile.id)
+        .filter(models.Collection.profile_id == profile.id, models.Collection.game == game)
         .order_by(models.Collection.sort_order, models.Collection.name)
         .all()
     )
@@ -50,7 +50,7 @@ def create_collection(body: schemas.CollectionCreate, db: Session = Depends(get_
     max_order = db.query(func.max(models.Collection.sort_order)).filter(
         models.Collection.profile_id == profile.id
     ).scalar() or 0
-    c = models.Collection(name=body.name, sort_order=max_order + 1, profile_id=profile.id)
+    c = models.Collection(name=body.name, game=body.game, sort_order=max_order + 1, profile_id=profile.id)
     db.add(c)
     db.commit()
     db.refresh(c)

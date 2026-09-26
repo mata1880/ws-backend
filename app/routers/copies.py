@@ -92,9 +92,11 @@ def counts_for_card(card_id: int, db: Session = Depends(get_db), profile: models
     to collection" picker, so adjusting quantity doesn't need a second
     popup.
     """
+    card = db.query(models.Card).get(card_id)
     collections = (
         db.query(models.Collection)
-        .filter(models.Collection.profile_id == profile.id)
+        .filter(models.Collection.profile_id == profile.id,
+                models.Collection.game == (card.game if card else "ws"))   # only this card's game
         .order_by(models.Collection.sort_order, models.Collection.name)
         .all()
     )

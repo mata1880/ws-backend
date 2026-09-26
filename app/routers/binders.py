@@ -61,10 +61,10 @@ def _slot_out(slot: models.BinderSlot, wishlist_by_card: dict = None, db: Sessio
 
 
 @router.get("", response_model=List[schemas.BinderOut])
-def list_binders(db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
+def list_binders(game: str = "ws", db: Session = Depends(get_db), profile: models.Profile = Depends(get_current_profile)):
     return (
         db.query(models.Binder)
-        .filter(models.Binder.profile_id == profile.id)
+        .filter(models.Binder.profile_id == profile.id, models.Binder.game == game)
         .order_by(models.Binder.sort_order, models.Binder.name)
         .all()
     )
@@ -89,7 +89,7 @@ def create_binder(body: schemas.BinderCreate, db: Session = Depends(get_db), pro
     max_order = db.query(func.max(models.Binder.sort_order)).filter(
         models.Binder.profile_id == profile.id
     ).scalar() or 0
-    b = models.Binder(name=body.name, layout=body.layout, sort_order=max_order + 1, profile_id=profile.id)
+    b = models.Binder(name=body.name, game=body.game, layout=body.layout, sort_order=max_order + 1, profile_id=profile.id)
     db.add(b)
     db.commit()
     db.refresh(b)

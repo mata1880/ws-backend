@@ -8,6 +8,7 @@ class CardOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     game: str
+    language: str = "ja"
     set_code: str
     card_number: str
     name: str
@@ -93,6 +94,7 @@ class PriceUpdateResult(BaseModel):
 
 class CollectionCreate(BaseModel):
     name: str
+    game: str = "ws"
 
 
 class CollectionRename(BaseModel):
@@ -103,6 +105,7 @@ class CollectionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
+    game: str = "ws"
     created_at: datetime
     sort_order: int = 0
 
@@ -140,6 +143,7 @@ class BinderValueOut(BaseModel):
 
 class WishlistCreate(BaseModel):
     name: str
+    game: str = "ws"
 
 
 class WishlistRename(BaseModel):
@@ -150,6 +154,7 @@ class WishlistOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
+    game: str = "ws"
     created_at: datetime
     sort_order: int = 0
 
@@ -161,6 +166,7 @@ class WishlistItemAdd(BaseModel):
 class BinderCreate(BaseModel):
     name: str
     layout: str = "3x3"
+    game: str = "ws"
 
 
 class BinderUpdate(BaseModel):
@@ -172,6 +178,7 @@ class BinderOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
+    game: str = "ws"
     layout: str
     created_at: datetime
     sort_order: int = 0

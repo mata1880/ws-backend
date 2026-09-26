@@ -12,6 +12,24 @@ from sqlalchemy import text
 from . import models
 
 
+def add_game_columns(db: Session):
+    """
+    Multi-game support: collections/wishlists/binders get a `game` (existing
+    rows become "ws"), and cards get a `language` (existing rows become "ja").
+    Must run before ANY other migration touches these models through the ORM,
+    since the ORM selects every declared column. Safe to run every startup.
+    """
+    for table, col, default in (("collections", "game", "ws"), ("wishlists", "game", "ws"),
+                                ("binders", "game", "ws"), ("cards", "language", "ja")):
+        try:
+            db.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} VARCHAR DEFAULT '{default}'"))
+            db.commit()
+        except Exception:
+            db.rollback()  # already there
+        db.execute(text(f"UPDATE {table} SET {col} = '{default}' WHERE {col} IS NULL"))
+        db.commit()
+
+
 def add_copy_profile_id_column(db: Session):
     """
     Just adds copies.profile_id — nothing else. Deliberately its own tiny
