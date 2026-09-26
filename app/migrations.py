@@ -30,6 +30,18 @@ def add_game_columns(db: Session):
         db.commit()
 
 
+def add_yuyutei_url_and_fix_gcg_rarity(db: Session):
+    """cards.yuyutei_url (direct link per card), and Gundam rarities saved as
+    "LR ++" (official site's spacing) become "LR++" to match yuyu-tei."""
+    try:
+        db.execute(text("ALTER TABLE cards ADD COLUMN yuyutei_url VARCHAR"))
+        db.commit()
+    except Exception:
+        db.rollback()
+    db.execute(text("UPDATE cards SET rarity = REPLACE(rarity, ' ', '') WHERE game = 'gcg' AND rarity LIKE '% %'"))
+    db.commit()
+
+
 def add_copy_profile_id_column(db: Session):
     """
     Just adds copies.profile_id — nothing else. Deliberately its own tiny

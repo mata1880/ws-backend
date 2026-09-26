@@ -70,6 +70,7 @@ class Card(Base):
     id = Column(Integer, primary_key=True)
     game = Column(String, nullable=False, default="ws")
     language = Column(String, nullable=False, default="ja")   # "ja" / "zh" / "en" — tagged now, no UI yet
+    yuyutei_url = Column(String, nullable=True)   # this exact card's yuyu-tei page, saved by price scrapes
     set_code = Column(String, nullable=False)          # yuyu-tei internal slug, e.g. "osk3.0"
     card_number = Column(String, nullable=False, unique=True)  # e.g. "OSK/S133-001SSP"
     name = Column(String, nullable=False, default="")

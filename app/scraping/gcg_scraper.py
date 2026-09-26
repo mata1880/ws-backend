@@ -81,6 +81,8 @@ def parse_detail(html: str, detail_id: str) -> GcgCard:
     soup = BeautifulSoup(html, "html.parser")
     number = _txt(soup.select_one(".cardNo")) or detail_id.split("_")[0]
     rarity = _txt(soup.select_one(".rarity"))
+    if rarity:
+        rarity = rarity.replace(" ", "")   # official site writes "LR ++"; yuyu-tei writes "LR++"
     # Parallels (…_p1, _p2) share the printed number; shops call them LR+ / LR++.
     m = re.search(r"_p(\d+)$", detail_id)
     if m and rarity and "+" not in rarity:

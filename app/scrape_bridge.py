@@ -55,26 +55,36 @@ def run_price_scrape(db: Session, game: str, card_code: str, mode: str, delay: f
     # to mean hundreds of separate round-trips to the database before any
     # actual price work even happened, which dominated runtime far more
     # than the yuyu-tei requests themselves did.
-    card_numbers = list({rec.cardNumber for rec in records if rec.cardNumber})
-    cards_by_number = {}
-    if card_numbers:
-        for c in db.query(models.Card).filter(models.Card.card_number.in_(card_numbers)).all():
-            cards_by_number[c.card_number] = c
-    for rec in records:
-        if rec.cardNumber and rec.cardNumber not in cards_by_number:
-            new_card = models.Card(card_number=rec.cardNumber, game=rec.game, set_code=rec.setCode, name="")
-            db.add(new_card)
-            cards_by_number[rec.cardNumber] = new_card
+    if game == "gcg":
+        card_for = _gcg_card_matcher(db, records)
+    else:
+        card_numbers = list({rec.cardNumber for rec in records if rec.cardNumber})
+        cards_by_number = {}
+        if card_numbers:
+            for c in db.query(models.Card).filter(models.Card.card_number.in_(card_numbers)).all():
+                cards_by_number[c.card_number] = c
+        for rec in records:
+            if rec.cardNumber and rec.cardNumber not in cards_by_number:
+                new_card = models.Card(card_number=rec.cardNumber, game=rec.game, set_code=rec.setCode, name="")
+                db.add(new_card)
+                cards_by_number[rec.cardNumber] = new_card
+        card_for = lambda rec: cards_by_number[rec.cardNumber]
     db.flush()  # assigns .id to every new card in one batch, not one per record
 
     new_snapshots = []
     for rec in records:
-        card = cards_by_number[rec.cardNumber]
+        if not rec.cardNumber:
+            continue
+        card = card_for(rec)
+        if rec.url:
+            card.yuyutei_url = rec.url   # direct link to this exact version, not a search
         # keep name/rarity/image current — cheap, and yuyu-tei sometimes has
-        # these when the catalog scrape hasn't been run for this card yet
-        if rec.name:
+        # these when the catalog scrape hasn't been run for this card yet.
+        # Gundam: the official list is the source of truth for names, so
+        # only fill in a name when there isn't one.
+        if rec.name and (game != "gcg" or not card.name):
             card.name = rec.name
-        if rec.rarity:
+        if rec.rarity and game != "gcg":
             card.rarity = rec.rarity
         if rec.imageUrl and not card.image_url:
             card.image_url = rec.imageUrl
@@ -104,6 +114,44 @@ def run_price_scrape(db: Session, game: str, card_code: str, mode: str, delay: f
 
     db.commit()
     return {"cards_seen": cards_seen, "price_snapshots_added": snapshots_added, "sets": sets_touched}
+
+
+def _norm_rarity(r) -> str:
+    return (r or "").replace(" ", "").upper()
+
+
+def _gcg_card_matcher(db: Session, records):
+    """
+    Gundam: yuyu-tei lists every version of a card (LR, LR+, LR++) under the
+    same number, and our official-list cards are GD01-001, GD01-001_p1,
+    GD01-001_p2 with those rarities. So match on (printed number, rarity).
+    A version we don't have yet gets its own card instead of overwriting
+    another version's price: the printed number if that's free, otherwise
+    number + "_" + rarity (e.g. EXR-007_SP).
+    """
+    existing = db.query(models.Card).filter(models.Card.game == "gcg").all()
+    by_key, taken = {}, {c.card_number for c in existing}
+    for c in existing:
+        by_key.setdefault((c.card_number.split("_")[0], _norm_rarity(c.rarity)), c)
+    plain = {c.card_number: c for c in existing}
+
+    for rec in records:
+        if not rec.cardNumber:
+            continue
+        key = (rec.cardNumber, _norm_rarity(rec.rarity))
+        if key in by_key:
+            continue
+        base = plain.get(rec.cardNumber)
+        if base is not None and not base.rarity:   # bare card with no rarity yet: claim it
+            base.rarity = rec.rarity
+            by_key[key] = base
+            continue
+        number = rec.cardNumber if rec.cardNumber not in taken else f"{rec.cardNumber}_{_norm_rarity(rec.rarity) or 'X'}"
+        card = models.Card(card_number=number, game="gcg", set_code=rec.setCode, name="", rarity=rec.rarity)
+        db.add(card)
+        taken.add(number)
+        by_key[key] = card
+    return lambda rec: by_key[(rec.cardNumber, _norm_rarity(rec.rarity))]
 
 
 def _base_card_number(cn: str) -> str:
@@ -139,7 +187,7 @@ def _set_code_prefix(card_number: str):
 def _search_code(card) -> str:
     """What to search yuyu-tei for. Gundam parallels are stored as GD01-001_p1
     (our own suffix, since they share the printed number) — shops only know GD01-001."""
-    return re.sub(r"_p\d+$", "", card.card_number or "")
+    return (card.card_number or "").split("_")[0] if (card.game == "gcg") else (card.card_number or "")
 
 
 def run_price_check(db: Session, cards, delay: float = 1.2):
@@ -362,6 +410,19 @@ def run_gcg_catalog_scrape(db: Session, query: str, delay: float = 0.6):
                 continue
             _time.sleep(delay)
             d = gcg.fetch_detail(session, detail_id)
+            if card is None:
+                # A price scrape may have created this version already (e.g. as
+                # "GD02-099_C+"); adopt it under the official id instead of duplicating.
+                base = detail_id.split("_")[0]
+                stray = next((c for c in existing.values()
+                              if c.card_number.split("_")[0] == base and c.card_number != detail_id
+                              and not _re.match(r"^.+_p\d+$", c.card_number)
+                              and _norm_rarity(c.rarity) == _norm_rarity(d.rarity)), None)
+                if stray is not None:
+                    existing.pop(stray.card_number, None)
+                    stray.card_number = detail_id
+                    existing[detail_id] = stray
+                    card = stray
             if card is None:
                 card = models.Card(card_number=detail_id, game="gcg", language="ja",
                                    set_code=set_code, name=d.name or "")

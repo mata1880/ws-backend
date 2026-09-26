@@ -9,6 +9,7 @@ class CardOut(BaseModel):
     id: int
     game: str
     language: str = "ja"
+    yuyutei_url: Optional[str] = None
     set_code: str
     card_number: str
     name: str

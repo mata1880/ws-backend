@@ -9,6 +9,7 @@ models.Base.metadata.create_all(bind=engine)
 
 with SessionLocal() as _db:
     migrations.add_game_columns(_db)
+    migrations.add_yuyutei_url_and_fix_gcg_rarity(_db)
     migrations.add_copy_profile_id_column(_db)
     migrations.migrate_legacy_binder_placements(_db)
     # add_profiles must run BEFORE add_sort_order_columns: since Collection/
