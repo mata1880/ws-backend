@@ -25,7 +25,10 @@ def scrape_prices(req: schemas.ScrapePricesRequest, db: Session = Depends(get_db
 def scrape_catalog(req: schemas.ScrapeCatalogRequest, db: Session = Depends(get_db)):
     """Same as `python wstcg_scraper.py --query "..." --site`, merged into cards directly."""
     try:
-        result = scrape_bridge.run_catalog_scrape(db, req.query)
+        if req.game == "gcg":
+            result = scrape_bridge.run_gcg_catalog_scrape(db, req.query)
+        else:
+            result = scrape_bridge.run_catalog_scrape(db, req.query)
     except Exception as e:
         raise HTTPException(502, f"Scrape failed: {e}")
     return result

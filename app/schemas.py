@@ -57,7 +57,8 @@ class ScrapePricesRequest(BaseModel):
 
 
 class ScrapeCatalogRequest(BaseModel):
-    query: str               # e.g. "OSK"
+    query: str               # e.g. "OSK" (Weiss) or "GD01" (Gundam)
+    game: str = "ws"
 
 
 class ScrapeResult(BaseModel):

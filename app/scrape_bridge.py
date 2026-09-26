@@ -126,6 +126,16 @@ def _title_prefix(card_number: str):
     return m.group(0).upper() if m else (before or None)
 
 
+def _set_code_prefix(card_number: str):
+    # The SPECIFIC expansion code — e.g. "SAO/S71" from "SAO/S71-001R" —
+    # not just the broad title ("SAO"). A franchise like SAO can span many
+    # expansions; if you only own cards from S71, there's no reason a
+    # price-update search should also crawl through every other SAO
+    # release. Everything before the first "-" is exactly this, since
+    # yuyu-tei card numbers are always "TITLE/SETCODE-cardnum".
+    return (card_number or "").split("-", 1)[0] or None
+
+
 def run_price_check(db: Session, cards, delay: float = 1.2):
     """
     Fetches a price ONLY for cards in this list that don't have any price
@@ -169,19 +179,18 @@ def run_price_check(db: Session, cards, delay: float = 1.2):
 
 def run_price_update(db: Session, cards, delay: float = 1.2, only_titles=None):
     """
-    Re-checks prices for this list of cards by title, not one card at a
-    time: groups the cards by title prefix (e.g. "OSK") and runs ONE
-    broad scrape per distinct title, the same kind of scrape Browse's
-    "Get card info" already does. A 100-150 card collection is usually
-    only a handful of titles, so this turns what used to be 100+
-    individual searches into maybe 3-6 — dramatically faster, at the
-    honest cost of also re-checking prices for cards in those titles you
-    don't own (harmless, just slightly more work than the bare minimum).
-    Reports which of YOUR specific cards had a sell/buy price change.
+    Re-checks prices for this list of cards by SPECIFIC expansion, not one
+    card at a time and not by broad franchise either: groups cards by the
+    exact set code (e.g. "SAO/S71" from "SAO/S71-001R", not just "SAO")
+    and runs one scrape per distinct expansion. If you only own cards from
+    one SAO release, this never touches any of SAO's other expansions —
+    keeping each individual search small even for a franchise with many
+    volumes, which also makes any single request far less likely to be
+    slow enough to time out.
 
-    only_titles: if given, restricts to exactly these titles instead of
+    only_titles: if given, restricts to exactly these set codes instead of
     auto-computing (and capping at MAX_PRICE_UPDATE_TITLES) the full set
-    — used by the frontend to process one title per request for a real,
+    — used by the frontend to process one at a time for a real,
     incremental progress counter instead of one long blocking call.
     """
     unique = []
@@ -211,7 +220,7 @@ def run_price_update(db: Session, cards, delay: float = 1.2, only_titles=None):
     else:
         titles = []
         for c in unique:
-            t = _title_prefix(c.card_number)
+            t = _set_code_prefix(c.card_number)
             if t and t not in titles:
                 titles.append(t)
         truncated = len(titles) > MAX_PRICE_UPDATE_TITLES
@@ -226,7 +235,7 @@ def run_price_update(db: Session, cards, delay: float = 1.2, only_titles=None):
     changed = []
     checked = 0
     for c in unique:
-        if _title_prefix(c.card_number) not in titles_set:
+        if _set_code_prefix(c.card_number) not in titles_set:
             continue  # this card's title wasn't covered this round (truncated) — try again next click
         checked += 1
         before_sell, before_buy = before_by_card[c.id]
@@ -307,3 +316,63 @@ def run_catalog_scrape(db: Session, query: str, delay: float = 1.0):
 
     db.commit()
     return {"cards_seen": cards_seen, "total_reported_by_site": total}
+
+
+def run_gcg_catalog_scrape(db: Session, query: str, delay: float = 0.6):
+    """
+    Gundam version of "Get card info": reads the official Japanese card list
+    (gundam-gcg.com) for the set(s) matching `query` (e.g. "GD01", "ST01").
+    One request at a time with a pause between them. Cards that already have
+    their text and image are skipped, so only the first run of a set is slow.
+    Each card is stored under its site id (GD01-001, or GD01-001_p1 for a
+    parallel), since Gundam parallels share their printed number.
+    """
+    import re as _re
+    import time as _time
+    from .scraping import gcg_scraper as gcg
+
+    session = requests.Session()
+    sets = gcg.resolve_sets(gcg.fetch_sets(session), query)
+    if not sets:
+        raise ValueError(f"No Gundam set matches '{query}'. Try a code like GD01, ST01 or EB01.")
+
+    existing = {c.card_number: c for c in db.query(models.Card).filter(models.Card.game == "gcg").all()}
+    cards_seen = skipped = total = 0
+    for package_id, set_name in sets:
+        m = _re.search(r"\[([A-Za-z0-9]+)\]", set_name)
+        set_code = (m.group(1) if m else package_id).lower()
+        _time.sleep(delay)
+        ids = gcg.fetch_card_ids(session, package_id)
+        total += len(ids)
+        for detail_id in ids:
+            card = existing.get(detail_id)
+            if card is not None and card.text and card.image_url:
+                skipped += 1
+                continue
+            _time.sleep(delay)
+            d = gcg.fetch_detail(session, detail_id)
+            if card is None:
+                card = models.Card(card_number=detail_id, game="gcg", language="ja",
+                                   set_code=set_code, name=d.name or "")
+                db.add(card)
+                db.flush()
+                existing[detail_id] = card
+            card.name = d.name or card.name
+            card.rarity = card.rarity or d.rarity
+            card.image_url = d.image_url or card.image_url
+            card.expansion_name = d.set_name or set_name
+            card.title_number = set_code.upper()
+            card.color, card.level, card.cost = d.color, d.level, d.cost
+            card.power, card.soul = d.ap, d.hp          # AP / HP (Weiss power/soul slots)
+            card.trigger = d.card_type                   # UNIT / PILOT / COMMAND / BASE ...
+            card.traits = ", ".join(d.traits) if d.traits else None
+            card.text = d.text
+            extras = [f"地形: {d.terrain}" if d.terrain else None,
+                      f"リンク: {d.link}" if d.link else None,
+                      f"出典: {d.source_title}" if d.source_title else None]
+            card.flavor = " · ".join(x for x in extras if x) or None
+            cards_seen += 1
+        db.commit()   # one commit per set, so a failure later doesn't lose finished sets
+
+    return {"cards_seen": cards_seen, "skipped_already_complete": skipped,
+            "total_reported_by_site": total, "sets": [n for _, n in sets]}
