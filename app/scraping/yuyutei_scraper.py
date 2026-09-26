@@ -471,6 +471,15 @@ def scrape_set(session: requests.Session, game: str, set_code: str, mode: str,
 def merge_rows(sell_rows, buy_rows, mode):
     by_number = {}
 
+    def key(r):
+        # Weiss parallels have their own numbers (…SP, …SSP), so number alone
+        # is unique. Gundam lists every version (LR, LR+, LR++) under ONE number,
+        # so there the rarity must be part of the key or the versions overwrite
+        # each other and only one survives.
+        if r["game"] == "gcg":
+            return (r["cardNumber"], (r["rarity"] or "").replace(" ", "").upper())
+        return r["cardNumber"]
+
     def sell_url(r):
         # Always construct the SELL-page URL from game/setCode/cardId,
         # regardless of whether this row came from sell_rows or buy_rows —
@@ -489,17 +498,17 @@ def merge_rows(sell_rows, buy_rows, mode):
         # first (non-discount) price is the sell price
         if r["prices"]:
             rec.sellPriceJpy = r["prices"][0]
-        by_number[r["cardNumber"]] = rec
+        by_number[key(r)] = rec
 
     for r in buy_rows:
-        rec = by_number.get(r["cardNumber"])
+        rec = by_number.get(key(r))
         if rec is None:
             rec = CardRecord(
                 game=r["game"], setCode=r["setCode"], cardId=r["cardId"],
                 cardNumber=r["cardNumber"], name=r["name"], rarity=r["rarity"],
                 imageUrl=r["imageUrl"], url=sell_url(r),
             )
-            by_number[r["cardNumber"]] = rec
+            by_number[key(r)] = rec
 
         prices = r["prices"]
         if r["boosted"] and len(prices) >= 2:

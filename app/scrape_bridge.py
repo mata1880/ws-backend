@@ -26,6 +26,37 @@ def _get_or_create_card(db: Session, card_number: str, game: str, set_code: str)
 BULK_RARITIES_SKIP_PRICE = {"C", "U", "R", "CR", "CX"}
 
 
+_SET_PAGE_CACHE = {}
+
+
+def _fetch_yuyutei(session, game: str, card_code: str, mode: str, delay: float):
+    """
+    Weiss: yuyu-tei keyword search (unchanged).
+    Gundam: yuyu-tei's search leaves out parallels (a search for GD02-054
+    returns only the plain LR, not its LR+ / LR++), so read the full SET page
+    instead ("GD02-054" -> /sell/gcg/s/gd02), which lists every version, and
+    keep just that card — or the whole set when the code is a set ("GD02").
+    Codes with no set prefix (e.g. EXR-007) still use search.
+    """
+    if game == "gcg":
+        code = (card_code or "").strip()
+        m = re.match(r"^([A-Za-z]+\d+)(?:-(.+))?$", code)
+        if m:
+            slug = m.group(1).lower()
+            import time as _t
+            hit = _SET_PAGE_CACHE.get((slug, mode))
+            if hit and _t.time() - hit[0] < 300:        # reuse for 5 min: a price check over many
+                records, set_name = hit[1], hit[2]     # cards from one set loads the page once
+            else:
+                records, set_name = yuyutei.scrape_set(session, game, slug, mode, delay)
+                _SET_PAGE_CACHE[(slug, mode)] = (_t.time(), records, set_name)
+            if m.group(2):
+                records = [r for r in records if (r.cardNumber or "").upper() == code.upper()]
+            if records:
+                return records, [(slug, set_name, records)]
+    return yuyutei.scrape_by_card_code(session, game, card_code, mode, delay)
+
+
 def run_price_scrape(db: Session, game: str, card_code: str, mode: str, delay: float = 1.5, skip_bulk_rarities: bool = False):
     """
     Runs the exact same logic as `yuyutei_scraper.py --card-code`, but
@@ -41,7 +72,7 @@ def run_price_scrape(db: Session, game: str, card_code: str, mode: str, delay: f
     so those rarities still get real prices when you actually own one.
     """
     session = requests.Session()
-    records, groups = yuyutei.scrape_by_card_code(session, game, card_code, mode, delay)
+    records, groups = _fetch_yuyutei(session, game, card_code, mode, delay)
 
     cards_seen = 0
     snapshots_added = 0
@@ -457,7 +488,7 @@ def preview_price_scrape(db: Session, game: str, card_code: str):
     Writes nothing.
     """
     session = requests.Session()
-    records, _ = yuyutei.scrape_by_card_code(session, game, card_code, "both", 1.0)
+    records, _ = _fetch_yuyutei(session, game, card_code, "both", 1.0)
     if game == "gcg":
         by_key = {}
         for c in db.query(models.Card).filter(models.Card.game == "gcg").all():
