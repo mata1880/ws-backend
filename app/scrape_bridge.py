@@ -448,3 +448,25 @@ def run_gcg_catalog_scrape(db: Session, query: str, delay: float = 0.6):
 
     return {"cards_seen": cards_seen, "skipped_already_complete": skipped,
             "total_reported_by_site": total, "sets": [n for _, n in sets]}
+
+
+def preview_price_scrape(db: Session, game: str, card_code: str):
+    """
+    Read-only diagnostic: what yuyu-tei returns for this code, and which of
+    our cards each result WOULD be matched to by a real price scrape.
+    Writes nothing.
+    """
+    session = requests.Session()
+    records, _ = yuyutei.scrape_by_card_code(session, game, card_code, "both", 1.0)
+    if game == "gcg":
+        by_key = {}
+        for c in db.query(models.Card).filter(models.Card.game == "gcg").all():
+            by_key.setdefault((c.card_number.split("_")[0], _norm_rarity(c.rarity)), c.card_number)
+        match = lambda r: by_key.get((r.cardNumber, _norm_rarity(r.rarity)))
+    else:
+        nums = {c.card_number for c in db.query(models.Card).filter(
+            models.Card.card_number.in_([r.cardNumber for r in records if r.cardNumber])).all()}
+        match = lambda r: r.cardNumber if r.cardNumber in nums else None
+    return [{"yuyutei_number": r.cardNumber, "yuyutei_rarity": r.rarity, "name": r.name,
+             "sell_jpy": r.sellPriceJpy, "buy_jpy": r.buyPriceJpy, "page": r.url,
+             "matches_your_card": match(r) or "(none — would create a new card)"} for r in records]

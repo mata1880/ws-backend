@@ -21,6 +21,15 @@ def scrape_prices(req: schemas.ScrapePricesRequest, db: Session = Depends(get_db
     return schemas.ScrapeResult(**result)
 
 
+@router.get("/preview")
+def scrape_preview(code: str, game: str = "gcg", db: Session = Depends(get_db)):
+    """Read-only: shows what a price scrape for `code` would find and match. Changes nothing."""
+    try:
+        return scrape_bridge.preview_price_scrape(db, game, code)
+    except Exception as e:
+        raise HTTPException(502, f"Preview failed: {e}")
+
+
 @router.post("/catalog")
 def scrape_catalog(req: schemas.ScrapeCatalogRequest, db: Session = Depends(get_db)):
     """Same as `python wstcg_scraper.py --query "..." --site`, merged into cards directly."""
