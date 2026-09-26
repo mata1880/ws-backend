@@ -136,6 +136,12 @@ def _set_code_prefix(card_number: str):
     return (card_number or "").split("-", 1)[0] or None
 
 
+def _search_code(card) -> str:
+    """What to search yuyu-tei for. Gundam parallels are stored as GD01-001_p1
+    (our own suffix, since they share the printed number) — shops only know GD01-001."""
+    return re.sub(r"_p\d+$", "", card.card_number or "")
+
+
 def run_price_check(db: Session, cards, delay: float = 1.2):
     """
     Fetches a price ONLY for cards in this list that don't have any price
@@ -167,7 +173,7 @@ def run_price_check(db: Session, cards, delay: float = 1.2):
 
     total_snapshots = 0
     for c in to_check:
-        r = run_price_scrape(db, "ws", c.card_number, "both", delay)
+        r = run_price_scrape(db, c.game or "ws", _search_code(c), "both", delay)
         total_snapshots += r["price_snapshots_added"]
 
     return {
@@ -227,9 +233,14 @@ def run_price_update(db: Session, cards, delay: float = 1.2, only_titles=None):
         titles = titles[:MAX_PRICE_UPDATE_TITLES]
     titles_set = set(titles)
 
+    # Each set code belongs to one game (GD01 -> Gundam, SAO/S71 -> Weiss).
+    game_by_title = {}
+    for c in unique:
+        game_by_title.setdefault(_set_code_prefix(c.card_number), c.game or "ws")
+
     total_snapshots = 0
     for title in titles:
-        r = run_price_scrape(db, "ws", title, "both", delay)
+        r = run_price_scrape(db, game_by_title.get(title, "ws"), title, "both", delay)
         total_snapshots += r["price_snapshots_added"]
 
     changed = []
