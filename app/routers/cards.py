@@ -1,6 +1,9 @@
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from urllib.parse import urlparse
+
+import requests
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from .. import models, schemas, utils
@@ -30,6 +33,34 @@ def list_cards(
     cards = q.all()
     by_id = utils.cards_with_price_batch(db, cards)
     return [by_id[c.id] for c in cards]
+
+
+# Official card-image hosts whose images may be relayed. Kept to an explicit
+# list so this can't be used to fetch arbitrary sites.
+_IMAGE_HOSTS = {"www.gundam-gcg.com": "https://www.gundam-gcg.com/jp/cards/",
+                "gundam-gcg.com": "https://www.gundam-gcg.com/jp/cards/"}
+
+
+@router.get("/image")
+def relay_card_image(url: str):
+    """
+    Fetches an official card image and passes it on, for sites that refuse to
+    serve images to pages on other domains (hotlink protection). Only hosts in
+    _IMAGE_HOSTS are allowed. Registered BEFORE "/{card_id}" on purpose: FastAPI
+    matches in order, and "image" would otherwise be taken as a card id.
+    """
+    parsed = urlparse(url)
+    referer = _IMAGE_HOSTS.get(parsed.hostname or "")
+    if parsed.scheme != "https" or referer is None:
+        raise HTTPException(400, "Image host not allowed.")
+    try:
+        r = requests.get(url, headers={"Referer": referer, "User-Agent": "Mozilla/5.0"}, timeout=20)
+    except requests.RequestException as e:
+        raise HTTPException(502, f"Couldn't fetch image: {e}")
+    if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/"):
+        raise HTTPException(502, f"Image source answered {r.status_code}.")
+    return Response(content=r.content, media_type=r.headers["content-type"],
+                    headers={"Cache-Control": "public, max-age=604800"})   # browsers keep it a week
 
 
 @router.get("/{card_id}", response_model=schemas.CardWithPrice)
